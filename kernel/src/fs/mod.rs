@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+pub mod block_cache;
 pub mod devfs;
 #[allow(dead_code)]
 pub mod ext2;
