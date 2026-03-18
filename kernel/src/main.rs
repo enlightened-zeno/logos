@@ -199,6 +199,24 @@ fn kernel_main() -> ! {
     // Activate slab allocator for small allocations
     memory::slab::activate();
 
+    // Initialize framebuffer console
+    if let Some(response) = FRAMEBUFFER.get_response() {
+        let mut framebuffers = response.framebuffers();
+        if let Some(fb) = framebuffers.next() {
+            // SAFETY: Limine provides valid framebuffer info. The address is
+            // in the HHDM and writable.
+            unsafe {
+                drivers::framebuffer::init(
+                    fb.addr() as u64,
+                    fb.width() as u32,
+                    fb.height() as u32,
+                    fb.pitch() as u32,
+                    fb.bpp(),
+                );
+            }
+        }
+    }
+
     // Initialize GDT and TSS
     // SAFETY: Called once during single-threaded boot.
     unsafe {

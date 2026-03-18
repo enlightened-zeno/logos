@@ -116,4 +116,6 @@ macro_rules! serial_println {
 pub fn _serial_print(args: fmt::Arguments) {
     use fmt::Write;
     SERIAL1.lock().write_fmt(args).unwrap();
+    // Dual output to framebuffer console
+    let _ = crate::drivers::framebuffer::FbWriter.write_fmt(args);
 }
