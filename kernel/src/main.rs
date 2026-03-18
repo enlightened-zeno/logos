@@ -324,6 +324,36 @@ fn kernel_main() -> ! {
     fs::vfs::Vfs::mount("/proc", fs::procfs::ProcFs::new());
     fs::vfs::Vfs::mount("/tmp", fs::tmpfs::TmpFs::new());
 
+    // Enumerate PCI devices and initialize VirtIO block if present
+    let pci_devices = drivers::pci::enumerate();
+    serial_println!("PCI: found {} devices", pci_devices.len());
+    for dev in &pci_devices {
+        serial_println!(
+            "  {:02x}:{:02x}.{} {:04x}:{:04x} class={:02x}:{:02x}",
+            dev.bus,
+            dev.device,
+            dev.function,
+            dev.vendor_id,
+            dev.device_id,
+            dev.class,
+            dev.subclass
+        );
+    }
+
+    if let Some(blk_dev) = drivers::pci::find_device(
+        &pci_devices,
+        drivers::pci::VIRTIO_VENDOR,
+        drivers::pci::VIRTIO_BLOCK_DEVICE,
+    ) {
+        // SAFETY: PCI device is a valid VirtIO block device.
+        match unsafe { drivers::virtio::block::init(blk_dev, hhdm_offset) } {
+            Ok(()) => serial_println!("VirtIO block: ready"),
+            Err(e) => serial_println!("VirtIO block: init failed: {}", e),
+        }
+    } else {
+        serial_println!("VirtIO block: not found (no persistent storage)");
+    }
+
     // Initialize TTY subsystem
     tty::init();
 
