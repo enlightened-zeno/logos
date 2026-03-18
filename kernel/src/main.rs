@@ -1,11 +1,17 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
 #[macro_use]
 mod drivers;
+#[allow(dead_code)]
 mod arch;
+#[allow(dead_code)]
+mod entropy;
 mod memory;
 mod panic;
+#[allow(dead_code)]
+mod sync;
 pub mod test_framework;
 
 use limine::request::{
@@ -181,6 +187,73 @@ fn kernel_main() -> ! {
 
     // Activate slab allocator for small allocations
     memory::slab::activate();
+
+    // Initialize GDT and TSS
+    // SAFETY: Called once during single-threaded boot.
+    unsafe {
+        arch::x86_64::gdt::init();
+    }
+    serial_println!("GDT: loaded");
+
+    // Disable legacy PIC before setting up APIC
+    // SAFETY: Called during boot before APIC init.
+    unsafe {
+        arch::x86_64::pic::disable();
+    }
+
+    // Initialize IDT
+    // SAFETY: Called once after GDT is loaded.
+    unsafe {
+        arch::x86_64::idt::init();
+    }
+    serial_println!("IDT: loaded (exceptions 0-20)");
+
+    // Initialize Local APIC
+    // SAFETY: Called once after GDT/IDT/memory are ready.
+    unsafe {
+        arch::x86_64::apic::init(hhdm_offset);
+    }
+
+    // Calibrate and start the APIC timer
+    // SAFETY: Called after APIC init, interrupts still disabled.
+    unsafe {
+        arch::x86_64::apic::calibrate_timer();
+    }
+
+    // Wire up the timer interrupt handler
+    // SAFETY: Handler has correct x86-interrupt calling convention.
+    unsafe {
+        arch::x86_64::idt::set_handler(
+            arch::x86_64::apic::TIMER_VECTOR,
+            arch::x86_64::interrupts::timer_handler as *const () as u64,
+            0,
+        );
+    }
+
+    // Start periodic timer and enable interrupts
+    arch::x86_64::apic::start_periodic();
+    arch::x86_64::cpu::sti();
+    serial_println!("APIC timer: running at ~1000 Hz");
+
+    // Brief spin to verify tick counter advances
+    let t0 = arch::x86_64::apic::ticks();
+    for _ in 0..1_000_000 {
+        core::hint::spin_loop();
+    }
+    let t1 = arch::x86_64::apic::ticks();
+    serial_println!("Ticks after spin: {} (delta={})", t1, t1 - t0);
+    assert!(t1 > t0, "APIC timer not ticking");
+    serial_println!("TEST APIC timer ticking: PASS");
+
+    // Initialize CSPRNG
+    // SAFETY: Called once during boot.
+    unsafe {
+        entropy::init();
+    }
+    let r = entropy::random_u64();
+    serial_println!("Entropy: random sample = {:#x}", r);
+    assert!(r != 0, "CSPRNG returned zero");
+    serial_println!("TEST entropy: PASS");
 
     // Run memory integration tests
     memory_tests();

@@ -68,7 +68,14 @@ jobs:
         run: ./tools/mkimage-noroot.sh
       - name: Run kernel boot test
         run: |
-          OVMF=$(find /usr -name 'OVMF_CODE*.fd' -not -name '*secboot*' 2>/dev/null | head -1)
+          for candidate in \
+            /usr/share/OVMF/OVMF_CODE.fd \
+            /usr/share/OVMF/OVMF_CODE_4M.fd \
+            /usr/share/ovmf/OVMF.fd \
+            /usr/share/qemu/OVMF.fd; do
+            if [ -f "$candidate" ]; then OVMF="$candidate"; break; fi
+          done
+          if [ -z "$OVMF" ]; then echo "ERROR: No OVMF firmware found"; exit 1; fi
           echo "Using OVMF: $OVMF"
           timeout 30 qemu-system-x86_64 \
             -bios "$OVMF" \
@@ -86,4 +93,6 @@ jobs:
           echo "=== Validating ==="
           grep -q "Boot complete. Halting." build/serial.log
           grep -q "All memory tests passed." build/serial.log
+          grep -q "TEST APIC timer ticking: PASS" build/serial.log
+          grep -q "TEST entropy: PASS" build/serial.log
           echo "Kernel boot test passed."
