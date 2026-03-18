@@ -310,10 +310,19 @@ pub fn uname() {
 
 pub fn ps() {
     let cpus = crate::arch::x86_64::smp::cpus_online();
-    crate::serial_println!("  PID  STATE    NAME");
-    crate::serial_println!("    1  running  kernel");
+    let procs = crate::process::pid::list();
+    crate::serial_println!("  PID  PPID  STATE");
+    for (pid, ppid, state) in &procs {
+        let state_str = match state {
+            crate::process::pid::ProcessState::Running => "running",
+            crate::process::pid::ProcessState::Sleeping => "sleeping",
+            crate::process::pid::ProcessState::Zombie => "zombie",
+            crate::process::pid::ProcessState::Stopped => "stopped",
+        };
+        crate::serial_println!("{:>5}  {:>4}  {}", pid, ppid, state_str);
+    }
     crate::serial_println!();
-    crate::serial_println!("CPUs online: {}", cpus);
+    crate::serial_println!("{} processes, {} CPUs online", procs.len(), cpus);
 }
 
 pub fn clear() {

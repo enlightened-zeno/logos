@@ -300,6 +300,9 @@ fn kernel_main() -> ! {
         arch::x86_64::syscall::init();
     }
 
+    // Initialize process table
+    process::pid::init();
+
     // Initialize scheduler
     sched::init();
 
@@ -439,6 +442,29 @@ fn kernel_main() -> ! {
             "Kernel not mapped in new address space"
         );
         serial_println!("TEST address space creation: PASS");
+    }
+
+    // Test process table
+    {
+        use process::pid;
+        let before = pid::count();
+        let new_pid = pid::alloc_pid();
+        pid::register(pid::ProcessDesc {
+            pid: new_pid,
+            ppid: 1,
+            pgid: 1,
+            sid: 1,
+            state: pid::ProcessState::Running,
+            exit_code: 0,
+            uid: 0,
+            gid: 0,
+        });
+        assert_eq!(pid::count(), before + 1);
+        pid::set_zombie(new_pid, 42);
+        let code = pid::reap(new_pid).expect("reap failed");
+        assert_eq!(code, 42);
+        assert_eq!(pid::count(), before);
+        serial_println!("TEST process table: PASS");
     }
 
     // Test signals
