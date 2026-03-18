@@ -16,6 +16,8 @@ mod panic;
 mod process;
 pub mod sched;
 #[allow(dead_code)]
+mod shell;
+#[allow(dead_code)]
 mod sync;
 #[allow(dead_code)]
 mod syscall;
@@ -334,7 +336,9 @@ fn kernel_main() -> ! {
 
     serial_println!("Boot complete. Halting.");
 
-    halt_loop()
+    // Initialize shell CWD and launch the interactive shell
+    shell::builtins::init_cwd();
+    shell::run()
 }
 
 fn vfs_tests() {
