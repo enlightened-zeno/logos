@@ -7,6 +7,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_HOME: /home/runner/.cargo
+  CARGO_INCREMENTAL: 0
 
 jobs:
   quality:
@@ -54,10 +56,30 @@ jobs:
         with:
           toolchain: nightly-2026-03-01
           components: rust-src, llvm-tools-preview
-      - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86
-      - name: Run in-kernel tests
-        env:
-          QEMU_SMP: ${{ matrix.smp }}
-          QEMU_MEM: ${{ matrix.memory }}
-        run: cargo test --target x86_64-logos.json
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf mtools
+      - name: Build kernel
+        run: cargo build
+      - name: Create boot image
+        run: ./tools/mkimage-noroot.sh
+      - name: Run kernel boot test
+        run: |
+          timeout 30 qemu-system-x86_64 \
+            -bios /usr/share/OVMF/OVMF_CODE.fd \
+            -drive file=build/logos.img,format=raw \
+            -machine q35 \
+            -cpu qemu64,+rdrand,+xsave,+xsaveopt \
+            -smp ${{ matrix.smp }} \
+            -m ${{ matrix.memory }} \
+            -serial file:build/serial.log \
+            -display none \
+            -no-reboot \
+            2>/dev/null || true
+          echo "=== Serial output ==="
+          cat build/serial.log | strings | grep -v '^\[' | grep -v '^BdsDxe'
+          echo "=== Checking for success ==="
+          grep -q "Boot complete. Halting." build/serial.log
+          grep -q "All memory tests passed." build/serial.log
+          echo "Kernel boot test passed."
