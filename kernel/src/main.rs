@@ -294,6 +294,13 @@ fn kernel_main() -> ! {
     assert!(r != 0, "CSPRNG returned zero");
     serial_println!("TEST entropy: PASS");
 
+    // Initialize per-CPU data (needed for SWAPGS in syscall entry)
+    // SAFETY: Called once after GDT/TSS.
+    unsafe {
+        // Use the TSS RSP0 as the kernel stack for syscall entry
+        arch::x86_64::percpu::init(0); // Will be set properly when user processes run
+    }
+
     // Initialize SYSCALL/SYSRET
     // SAFETY: Called once after GDT is loaded.
     unsafe {
@@ -435,13 +442,46 @@ fn kernel_main() -> ! {
         let addr_space = AddressSpace::new(hhdm_offset).expect("AddressSpace::new failed");
         // Verify kernel mappings are present
         let mapper = memory::paging::PageMapper::new(addr_space.pml4_frame, hhdm_offset);
-        // Kernel code should be mapped (our current RIP is in kernel space)
         let kernel_virt = memory::addr::VirtAddr::new(0xFFFFFFFF80000000);
         assert!(
             mapper.translate(kernel_virt).is_some(),
             "Kernel not mapped in new address space"
         );
         serial_println!("TEST address space creation: PASS");
+    }
+
+    // Test embedded user ELF loading
+    {
+        static USER_ELF: &[u8] = include_bytes!("test_user_program.bin");
+        let info = process::elf::parse(USER_ELF).expect("test ELF parse failed");
+        assert_eq!(info.entry_point, 0x400000);
+        assert_eq!(info.segments.len(), 1);
+        assert!(info.segments[0].is_executable());
+        assert!(!info.segments[0].is_writable());
+
+        // Load into a fresh address space
+        use process::address_space::AddressSpace;
+        let addr_space = AddressSpace::new(hhdm_offset).expect("new addr space");
+        let seg = &info.segments[0];
+        let flags = memory::paging::PageFlags::USER; // RX (no WRITABLE, no NO_EXECUTE)
+        addr_space
+            .load_segment(
+                seg.vaddr,
+                &USER_ELF[seg.offset as usize..(seg.offset + seg.filesz) as usize],
+                seg.memsz,
+                flags,
+            )
+            .expect("load segment");
+
+        // Verify the code was loaded by reading it back via HHDM
+        let mapper = memory::paging::PageMapper::new(addr_space.pml4_frame, hhdm_offset);
+        let phys = mapper
+            .translate(memory::addr::VirtAddr::new(0x400000))
+            .expect("translate entry");
+        let first_byte = unsafe { *((phys.as_u64() + hhdm_offset) as *const u8) };
+        assert_eq!(first_byte, 0x48, "First byte should be REX prefix");
+
+        serial_println!("TEST ELF load into address space: PASS");
     }
 
     // Test process table
