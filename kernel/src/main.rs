@@ -1720,6 +1720,24 @@ fn data_integrity_tests() {
         serial_println!("TEST devfs /dev/zero fill: PASS");
     }
 
+    // FD: dup2 replaces target fd
+    {
+        let mut fd_table = fs::fd::FdTable::new();
+        let null = fs::vfs::Vfs::resolve("/dev/null").expect("/dev/null");
+        let fd0 = fd_table
+            .alloc(null.clone(), fs::fd::OpenFlags::RDWR)
+            .expect("alloc 0");
+        let _fd1 = fd_table
+            .alloc(null.clone(), fs::fd::OpenFlags::RDONLY)
+            .expect("alloc 1");
+        fd_table.dup2(fd0, 5).expect("dup2");
+        fd_table.get(5).expect("get 5");
+        fd_table.close(0).expect("close 0");
+        fd_table.close(1).expect("close 1");
+        fd_table.close(5).expect("close 5");
+        serial_println!("TEST FD dup2: PASS");
+    }
+
     serial_println!("All data integrity tests passed.");
 }
 
