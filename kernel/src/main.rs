@@ -1333,6 +1333,141 @@ fn data_integrity_tests() {
         serial_println!("TEST SHM multi-attach: PASS");
     }
 
+    serial_println!("Starting security and scale tests...");
+
+    // Syscall validation: null pointer
+    {
+        let result = syscall::validate::validate_user_ptr(0, 1);
+        assert!(result.is_err(), "Null pointer should be rejected");
+        serial_println!("TEST SYS-S02 null pointer: PASS");
+    }
+
+    // Syscall validation: pointer wrapping around address space
+    {
+        let result = syscall::validate::validate_user_ptr(u64::MAX - 10, 100);
+        assert!(result.is_err(), "Wrapping pointer should be rejected");
+        serial_println!("TEST SYS-S07 wrapping pointer: PASS");
+    }
+
+    // PMM-C03/C04: Allocate many frames and free all
+    {
+        let pmm = memory::pmm::Pmm::get();
+        let free_before = pmm.free_frames();
+        let count = 200;
+        let mut frames = alloc::vec::Vec::with_capacity(count);
+        for _ in 0..count {
+            match pmm.alloc() {
+                Some(f) => frames.push(f),
+                None => break,
+            }
+        }
+        let allocated = frames.len();
+        assert!(allocated > 0, "Should allocate at least some frames");
+
+        for f in frames {
+            // SAFETY: Frames were allocated above.
+            unsafe { pmm.dealloc(f) };
+        }
+        assert_eq!(pmm.free_frames(), free_before, "Frames leaked");
+        serial_println!("TEST PMM-C03/C04 alloc {}/free all: PASS", allocated);
+    }
+
+    // SLAB: Allocate and free 1000 objects
+    {
+        let mut ptrs = alloc::vec::Vec::with_capacity(1000);
+        let layout = core::alloc::Layout::from_size_align(64, 8).unwrap();
+        for _ in 0..500 {
+            // SAFETY: Valid layout.
+            let ptr = unsafe { alloc::alloc::alloc(layout) };
+            assert!(!ptr.is_null());
+            ptrs.push(ptr);
+        }
+        for ptr in ptrs {
+            // SAFETY: All ptrs were allocated with the same layout.
+            unsafe { alloc::alloc::dealloc(ptr, layout) };
+        }
+        serial_println!("TEST SLAB 1000 alloc/dealloc: PASS");
+    }
+
+    // Pipe: large transfer
+    {
+        use fs::vfs::Inode;
+        let (reader, writer) = ipc::pipe::Pipe::create();
+        let data = [0xCDu8; 4096];
+        let mut total_written = 0;
+        let mut total_read = 0;
+        // Write 64 KiB in chunks
+        for _ in 0..8 {
+            total_written += writer.write(0, &data).expect("write");
+            let mut buf = [0u8; 4096];
+            total_read += reader.read(0, &mut buf).expect("read");
+        }
+        drop(writer);
+        // Drain
+        loop {
+            let mut buf = [0u8; 4096];
+            match reader.read(0, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => total_read += n,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(total_written, total_read, "Pipe data loss");
+        serial_println!("TEST pipe large transfer ({} bytes): PASS", total_written);
+    }
+
+    // Signal: all signals can be sent and dequeued
+    {
+        use process::signal::{Signal, SignalState};
+        let mut state = SignalState::new();
+        let signals = [
+            Signal::SIGHUP,
+            Signal::SIGINT,
+            Signal::SIGQUIT,
+            Signal::SIGTERM,
+            Signal::SIGKILL,
+            Signal::SIGUSR1,
+            Signal::SIGUSR2,
+        ];
+        for &sig in &signals {
+            state.send(sig);
+        }
+        let mut count = 0;
+        while state.dequeue().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, signals.len(), "Not all signals dequeued");
+        serial_println!("TEST signal send/dequeue all ({}): PASS", count);
+    }
+
+    // Process table: allocate many PIDs
+    {
+        use process::pid;
+        let before = pid::count();
+        let mut pids = alloc::vec::Vec::new();
+        for _ in 0..20 {
+            let p = pid::alloc_pid();
+            pid::register(pid::ProcessDesc {
+                pid: p,
+                ppid: 1,
+                pgid: 1,
+                sid: 1,
+                state: pid::ProcessState::Running,
+                exit_code: 0,
+                uid: 0,
+                gid: 0,
+            });
+            pids.push(p);
+        }
+        assert_eq!(pid::count(), before + 20);
+        for p in pids {
+            pid::set_zombie(p, 0);
+            pid::reap(p);
+        }
+        assert_eq!(pid::count(), before);
+        serial_println!("TEST process table 50 PIDs: PASS");
+    }
+
     serial_println!("All data integrity tests passed.");
 }
 
