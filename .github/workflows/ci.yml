@@ -78,7 +78,7 @@ jobs:
           if [ -z "$OVMF" ]; then echo "ERROR: No OVMF firmware found"; exit 1; fi
           echo "Using OVMF: $OVMF"
           timeout 30 qemu-system-x86_64 \
-            -bios "$OVMF" \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF" \
             -drive file=build/logos.img,format=raw \
             -machine q35 \
             -cpu qemu64,+rdrand,+xsave,+xsaveopt \

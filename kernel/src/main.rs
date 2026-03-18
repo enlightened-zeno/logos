@@ -11,6 +11,9 @@ mod entropy;
 mod memory;
 mod panic;
 #[allow(dead_code)]
+mod process;
+pub mod sched;
+#[allow(dead_code)]
 mod sync;
 pub mod test_framework;
 
@@ -254,6 +257,33 @@ fn kernel_main() -> ! {
     serial_println!("Entropy: random sample = {:#x}", r);
     assert!(r != 0, "CSPRNG returned zero");
     serial_println!("TEST entropy: PASS");
+
+    // Initialize scheduler
+    sched::init();
+
+    // Spawn a test task
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static TEST_TASK_RAN: AtomicBool = AtomicBool::new(false);
+
+    fn test_task() -> ! {
+        TEST_TASK_RAN.store(true, Ordering::Release);
+        crate::serial_println!("TEST scheduler task switch: PASS");
+        // Halt this task — scheduler will only run the boot task
+        loop {
+            crate::arch::x86_64::cpu::hlt();
+        }
+    }
+
+    sched::spawn(test_task);
+
+    // Yield to let the test task run
+    sched::yield_now();
+
+    // We should return here after the test task yields back
+    assert!(
+        TEST_TASK_RAN.load(Ordering::Acquire),
+        "Test task did not run"
+    );
 
     // Run memory integration tests
     memory_tests();
