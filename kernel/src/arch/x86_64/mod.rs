@@ -6,3 +6,4 @@ pub mod idt;
 pub mod interrupts;
 pub mod io;
 pub mod pic;
+pub mod syscall;
