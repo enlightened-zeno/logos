@@ -62,6 +62,8 @@ jobs:
           sudo apt-get install -y qemu-system-x86 ovmf mtools
       - name: Build kernel
         run: cargo build
+      - name: Fetch Limine bootloader
+        run: ./tools/fetch-limine.sh
       - name: Create boot image
         run: ./tools/mkimage-noroot.sh
       - name: Run kernel boot test
