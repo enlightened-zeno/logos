@@ -229,6 +229,303 @@ impl Ext2Fs {
 
         Ok(entries)
     }
+
+    /// Write an inode back to disk.
+    fn write_inode(&self, ino: u32, inode: &DiskInode) -> Result<(), Errno> {
+        let group = ((ino - 1) / self.sb.inodes_per_group) as usize;
+        let index = ((ino - 1) % self.sb.inodes_per_group) as usize;
+        let inode_size = self.sb.inode_size() as usize;
+
+        let bg = &self.bgdt[group];
+        let offset =
+            bg.inode_table as u64 * self.block_size as u64 + index as u64 * inode_size as u64;
+
+        // SAFETY: DiskInode is repr(C) and we write exactly its size.
+        let bytes = unsafe {
+            core::slice::from_raw_parts(inode as *const DiskInode as *const u8, inode_size)
+        };
+        write_block_bytes(self.write_block, offset, bytes).map_err(|_| Errno::EIO)
+    }
+
+    /// Write a data block to disk.
+    fn write_data_block(&self, block_num: u32, data: &[u8]) -> Result<(), Errno> {
+        let offset = block_num as u64 * self.block_size as u64;
+        write_block_bytes(self.write_block, offset, data).map_err(|_| Errno::EIO)
+    }
+
+    /// Allocate a free block from the given block group.
+    fn alloc_block(&self, preferred_group: usize) -> Result<u32, Errno> {
+        let mut inner = self.inner.lock();
+        let bg_count = inner.sb.block_group_count() as usize;
+
+        for offset in 0..bg_count {
+            let group = (preferred_group + offset) % bg_count;
+            let bg = &inner.bgdt[group];
+
+            if bg.free_blocks_count == 0 {
+                continue;
+            }
+
+            // Read block bitmap
+            let mut bitmap = vec![0u8; self.block_size as usize];
+            if read_block_bytes(
+                self.read_block,
+                bg.block_bitmap as u64 * self.block_size as u64,
+                &mut bitmap,
+            )
+            .is_err()
+            {
+                continue;
+            }
+
+            // Find a free bit
+            let blocks_in_group = inner
+                .sb
+                .blocks_per_group
+                .min(inner.sb.blocks_count - group as u32 * inner.sb.blocks_per_group);
+            for bit in 0..blocks_in_group {
+                let byte_idx = bit as usize / 8;
+                let bit_idx = bit as usize % 8;
+                if bitmap[byte_idx] & (1 << bit_idx) == 0 {
+                    // Mark as allocated
+                    bitmap[byte_idx] |= 1 << bit_idx;
+                    let _ = write_block_bytes(
+                        self.write_block,
+                        bg.block_bitmap as u64 * self.block_size as u64,
+                        &bitmap,
+                    );
+
+                    // Update counters
+                    inner.bgdt[group].free_blocks_count -= 1;
+                    inner.sb.free_blocks_count -= 1;
+
+                    let block_num =
+                        group as u32 * inner.sb.blocks_per_group + bit + inner.sb.first_data_block;
+                    return Ok(block_num);
+                }
+            }
+        }
+
+        Err(Errno::ENOSPC)
+    }
+
+    /// Free a block back to its block group.
+    fn free_block(&self, block_num: u32) -> Result<(), Errno> {
+        let mut inner = self.inner.lock();
+        let group = ((block_num - inner.sb.first_data_block) / inner.sb.blocks_per_group) as usize;
+        let bit = ((block_num - inner.sb.first_data_block) % inner.sb.blocks_per_group) as usize;
+
+        let bg = &inner.bgdt[group];
+        let mut bitmap = vec![0u8; self.block_size as usize];
+        read_block_bytes(
+            self.read_block,
+            bg.block_bitmap as u64 * self.block_size as u64,
+            &mut bitmap,
+        )
+        .map_err(|_| Errno::EIO)?;
+
+        bitmap[bit / 8] &= !(1 << (bit % 8));
+        write_block_bytes(
+            self.write_block,
+            bg.block_bitmap as u64 * self.block_size as u64,
+            &bitmap,
+        )
+        .map_err(|_| Errno::EIO)?;
+
+        inner.bgdt[group].free_blocks_count += 1;
+        inner.sb.free_blocks_count += 1;
+        Ok(())
+    }
+
+    /// Allocate a free inode from the given block group.
+    fn alloc_inode(&self, preferred_group: usize) -> Result<u32, Errno> {
+        let mut inner = self.inner.lock();
+        let bg_count = inner.sb.block_group_count() as usize;
+
+        for offset in 0..bg_count {
+            let group = (preferred_group + offset) % bg_count;
+            let bg = &inner.bgdt[group];
+
+            if bg.free_inodes_count == 0 {
+                continue;
+            }
+
+            let mut bitmap = vec![0u8; self.block_size as usize];
+            if read_block_bytes(
+                self.read_block,
+                bg.inode_bitmap as u64 * self.block_size as u64,
+                &mut bitmap,
+            )
+            .is_err()
+            {
+                continue;
+            }
+
+            for bit in 0..inner.sb.inodes_per_group {
+                let byte_idx = bit as usize / 8;
+                let bit_idx = bit as usize % 8;
+                if bitmap[byte_idx] & (1 << bit_idx) == 0 {
+                    bitmap[byte_idx] |= 1 << bit_idx;
+                    let _ = write_block_bytes(
+                        self.write_block,
+                        bg.inode_bitmap as u64 * self.block_size as u64,
+                        &bitmap,
+                    );
+
+                    inner.bgdt[group].free_inodes_count -= 1;
+                    inner.sb.free_inodes_count -= 1;
+
+                    let ino = group as u32 * inner.sb.inodes_per_group + bit + 1;
+                    return Ok(ino);
+                }
+            }
+        }
+
+        Err(Errno::ENOSPC)
+    }
+
+    /// Write file data to an inode, allocating blocks as needed.
+    fn write_file_data(
+        &self,
+        inode: &mut DiskInode,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<usize, Errno> {
+        let mut bytes_written = 0;
+        let mut file_offset = offset;
+        let bs = self.block_size;
+
+        while bytes_written < data.len() {
+            let logical_block = (file_offset / bs as u64) as u32;
+            let block_offset = (file_offset % bs as u64) as usize;
+            let chunk = (bs as usize - block_offset).min(data.len() - bytes_written);
+
+            // Ensure we have a block allocated for this position
+            let mut disk_block = self.resolve_block(inode, logical_block).unwrap_or(0);
+            if disk_block == 0 {
+                // Allocate a new block
+                disk_block = self.alloc_block(0)?;
+                // Store in inode (only direct blocks for now)
+                if (logical_block as usize) < 12 {
+                    inode.block[logical_block as usize] = disk_block;
+                } else {
+                    return Err(Errno::EFBIG);
+                }
+                inode.blocks += bs / 512;
+            }
+
+            // Read-modify-write if partial block
+            let mut block_buf = vec![0u8; bs as usize];
+            if block_offset > 0 || chunk < bs as usize {
+                self.read_data_block(disk_block, &mut block_buf)?;
+            }
+            block_buf[block_offset..block_offset + chunk]
+                .copy_from_slice(&data[bytes_written..bytes_written + chunk]);
+            self.write_data_block(disk_block, &block_buf)?;
+
+            bytes_written += chunk;
+            file_offset += chunk as u64;
+        }
+
+        // Update size if we extended the file
+        let new_size = offset + bytes_written as u64;
+        if new_size > inode.size64() {
+            inode.size = new_size as u32;
+            if inode.is_regular() {
+                inode.dir_acl = (new_size >> 32) as u32;
+            }
+        }
+
+        Ok(bytes_written)
+    }
+
+    /// Add a directory entry to a directory inode.
+    fn add_dir_entry(
+        &self,
+        dir_ino: u32,
+        dir_inode: &mut DiskInode,
+        name: &str,
+        child_ino: u32,
+        file_type: u8,
+    ) -> Result<(), Errno> {
+        let name_bytes = name.as_bytes();
+        let needed = 8 + name_bytes.len();
+        let needed_aligned = needed.next_multiple_of(4);
+
+        let size = dir_inode.size64() as usize;
+        let mut data = vec![0u8; size + self.block_size as usize]; // Extra space for growth
+        if size > 0 {
+            self.read_file_data(dir_inode, 0, &mut data[..size])?;
+        }
+
+        // Try to find space in existing entries
+        let mut pos = 0;
+        while pos + 8 <= size {
+            // SAFETY: pos is within bounds.
+            let de: DirEntry = unsafe { core::ptr::read(data[pos..].as_ptr() as *const DirEntry) };
+            if de.rec_len == 0 {
+                break;
+            }
+
+            let actual_len = if de.inode != 0 {
+                (8 + de.name_len as usize).next_multiple_of(4)
+            } else {
+                0
+            };
+
+            let free_space = de.rec_len as usize - actual_len;
+            if free_space >= needed_aligned {
+                // Split this entry
+                let old_rec_len = de.rec_len;
+
+                // Shrink existing entry
+                // SAFETY: Writing within allocated buffer.
+                unsafe {
+                    let de_ptr = data[pos..].as_mut_ptr() as *mut DirEntry;
+                    (*de_ptr).rec_len = actual_len as u16;
+                }
+
+                // Write new entry after it
+                let new_pos = pos + actual_len;
+                let new_de = DirEntry {
+                    inode: child_ino,
+                    rec_len: (old_rec_len as usize - actual_len) as u16,
+                    name_len: name_bytes.len() as u8,
+                    file_type,
+                };
+                // SAFETY: new_pos + 8 is within buffer bounds.
+                unsafe {
+                    core::ptr::write(data[new_pos..].as_mut_ptr() as *mut DirEntry, new_de);
+                }
+                data[new_pos + 8..new_pos + 8 + name_bytes.len()].copy_from_slice(name_bytes);
+
+                // Write back the block containing the directory data
+                self.write_file_data(dir_inode, 0, &data[..size])?;
+                self.write_inode(dir_ino, dir_inode)?;
+                return Ok(());
+            }
+
+            pos += de.rec_len as usize;
+        }
+
+        // No space found — append at end (extend directory)
+        let new_de = DirEntry {
+            inode: child_ino,
+            rec_len: self.block_size as u16, // Takes the rest of the new block
+            name_len: name_bytes.len() as u8,
+            file_type,
+        };
+        let mut new_entry = vec![0u8; self.block_size as usize];
+        // SAFETY: Writing into freshly allocated buffer.
+        unsafe {
+            core::ptr::write(new_entry.as_mut_ptr() as *mut DirEntry, new_de);
+        }
+        new_entry[8..8 + name_bytes.len()].copy_from_slice(name_bytes);
+
+        self.write_file_data(dir_inode, size as u64, &new_entry)?;
+        self.write_inode(dir_ino, dir_inode)?;
+        Ok(())
+    }
 }
 
 impl FileSystem for Ext2Fs {
@@ -334,6 +631,186 @@ impl Inode for Ext2Inode {
             .collect())
     }
 
+    fn write(&self, offset: u64, data: &[u8]) -> Result<usize, Errno> {
+        let mut di = self.disk_inode()?;
+        if !di.is_regular() {
+            return Err(Errno::EINVAL);
+        }
+        let written = self.fs().write_file_data(&mut di, offset, data)?;
+        self.fs().write_inode(self.ino, &di)?;
+        Ok(written)
+    }
+
+    fn create(
+        &self,
+        name: &str,
+        inode_type: InodeType,
+        mode: u32,
+    ) -> Result<Arc<dyn Inode>, Errno> {
+        let mut dir_inode = self.disk_inode()?;
+        if !dir_inode.is_dir() {
+            return Err(Errno::ENOTDIR);
+        }
+
+        // Check if name already exists
+        let entries = self.fs().read_dir_entries(&dir_inode)?;
+        if entries.iter().any(|(n, _, _)| n == name) {
+            return Err(Errno::EEXIST);
+        }
+
+        let group = ((self.ino - 1) / self.fs().sb.inodes_per_group) as usize;
+        let new_ino = self.fs().alloc_inode(group)?;
+
+        let (file_mode, ft) = match inode_type {
+            InodeType::File => (S_IFREG | (mode as u16 & 0o777), FT_REG_FILE),
+            InodeType::Directory => (S_IFDIR | (mode as u16 & 0o777), FT_DIR),
+            _ => return Err(Errno::EINVAL),
+        };
+
+        let mut new_inode = DiskInode {
+            mode: file_mode,
+            uid: 0,
+            size: 0,
+            atime: 0,
+            ctime: 0,
+            mtime: 0,
+            dtime: 0,
+            gid: 0,
+            links_count: 1,
+            blocks: 0,
+            flags: 0,
+            osd1: 0,
+            block: [0; 15],
+            generation: 0,
+            file_acl: 0,
+            dir_acl: 0,
+            faddr: 0,
+            osd2: [0; 12],
+        };
+
+        if inode_type == InodeType::Directory {
+            new_inode.links_count = 2; // . and parent's link
+            dir_inode.links_count += 1; // .. in new dir points back
+
+            // Create . and .. entries in the new directory
+            let block = self.fs().alloc_block(group)?;
+            new_inode.block[0] = block;
+            new_inode.blocks = self.fs().block_size / 512;
+            new_inode.size = self.fs().block_size;
+
+            let mut dir_data = vec![0u8; self.fs().block_size as usize];
+            // . entry
+            let dot = DirEntry {
+                inode: new_ino,
+                rec_len: 12,
+                name_len: 1,
+                file_type: FT_DIR,
+            };
+            // SAFETY: Writing into freshly allocated buffer.
+            unsafe { core::ptr::write(dir_data.as_mut_ptr() as *mut DirEntry, dot) };
+            dir_data[8] = b'.';
+
+            // .. entry (takes rest of block)
+            let dotdot = DirEntry {
+                inode: self.ino,
+                rec_len: (self.fs().block_size as u16) - 12,
+                name_len: 2,
+                file_type: FT_DIR,
+            };
+            // SAFETY: Writing at offset 12 in the buffer.
+            unsafe {
+                core::ptr::write(dir_data[12..].as_mut_ptr() as *mut DirEntry, dotdot);
+            }
+            dir_data[20] = b'.';
+            dir_data[21] = b'.';
+
+            self.fs().write_data_block(block, &dir_data)?;
+        }
+
+        self.fs().write_inode(new_ino, &new_inode)?;
+        self.fs()
+            .add_dir_entry(self.ino, &mut dir_inode, name, new_ino, ft)?;
+
+        Ok(Arc::new(Ext2Inode {
+            fs: self.fs,
+            ino: new_ino,
+        }))
+    }
+
+    fn unlink(&self, name: &str) -> Result<(), Errno> {
+        let mut dir_inode = self.disk_inode()?;
+        if !dir_inode.is_dir() {
+            return Err(Errno::ENOTDIR);
+        }
+
+        // Find the entry
+        let size = dir_inode.size64() as usize;
+        let mut data = vec![0u8; size];
+        self.fs().read_file_data(&dir_inode, 0, &mut data)?;
+
+        let mut pos = 0;
+        let mut prev_pos: Option<usize> = None;
+        let mut found_ino = 0u32;
+
+        while pos + 8 <= size {
+            // SAFETY: pos is within bounds.
+            let de: DirEntry = unsafe { core::ptr::read(data[pos..].as_ptr() as *const DirEntry) };
+            if de.rec_len == 0 {
+                break;
+            }
+
+            if de.inode != 0 && de.name_len > 0 {
+                let name_start = pos + 8;
+                let name_end = name_start + de.name_len as usize;
+                if name_end <= size {
+                    let entry_name =
+                        core::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
+                    if entry_name == name {
+                        found_ino = de.inode;
+
+                        // Mark entry as deleted by setting inode to 0
+                        // SAFETY: Writing within bounds.
+                        unsafe {
+                            let de_ptr = data[pos..].as_mut_ptr() as *mut DirEntry;
+                            (*de_ptr).inode = 0;
+                        }
+
+                        // If there's a previous entry, merge the space
+                        if let Some(pp) = prev_pos {
+                            // SAFETY: prev_pos is a valid entry position.
+                            unsafe {
+                                let prev_ptr = data[pp..].as_mut_ptr() as *mut DirEntry;
+                                (*prev_ptr).rec_len += de.rec_len;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            prev_pos = Some(pos);
+            pos += de.rec_len as usize;
+        }
+
+        if found_ino == 0 {
+            return Err(Errno::ENOENT);
+        }
+
+        // Write back modified directory data
+        self.fs()
+            .write_file_data(&mut dir_inode, 0, &data[..size])?;
+        self.fs().write_inode(self.ino, &dir_inode)?;
+
+        // Decrement link count on the removed inode
+        let mut child = self.fs().read_inode(found_ino)?;
+        if child.links_count > 0 {
+            child.links_count -= 1;
+        }
+        self.fs().write_inode(found_ino, &child)?;
+
+        Ok(())
+    }
+
     fn readlink(&self) -> Result<String, Errno> {
         let di = self.disk_inode()?;
         if !di.is_symlink() {
@@ -400,4 +877,30 @@ fn read_block_bytes(
     read_fn(start_sector, &mut sector_buf)?;
     buf.copy_from_slice(&sector_buf[offset_in_sector..offset_in_sector + buf.len()]);
     Ok(())
+}
+
+/// Write bytes to the block device at an arbitrary byte offset.
+fn write_block_bytes(
+    write_fn: BlockWriteFn,
+    byte_offset: u64,
+    buf: &[u8],
+) -> Result<(), &'static str> {
+    use crate::drivers::virtio::block::SECTOR_SIZE;
+
+    let start_sector = byte_offset / SECTOR_SIZE;
+    let offset_in_sector = (byte_offset % SECTOR_SIZE) as usize;
+
+    if offset_in_sector == 0 && buf.len().is_multiple_of(SECTOR_SIZE as usize) {
+        // Aligned write — direct
+        return write_fn(start_sector, buf);
+    }
+
+    // Unaligned — read-modify-write
+    let total_bytes = offset_in_sector + buf.len();
+    let sectors_needed = (total_bytes as u64).div_ceil(SECTOR_SIZE);
+    let mut sector_buf = vec![0u8; (sectors_needed * SECTOR_SIZE) as usize];
+
+    // Zero-fill non-overwritten parts (RMW would need the read_fn too).
+    sector_buf[offset_in_sector..offset_in_sector + buf.len()].copy_from_slice(buf);
+    write_fn(start_sector, &sector_buf)
 }
