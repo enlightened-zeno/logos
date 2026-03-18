@@ -353,6 +353,18 @@ fn kernel_main() -> ! {
         );
     }
 
+    // Check for AHCI controller
+    for dev in &pci_devices {
+        if dev.class == drivers::ahci::AHCI_CLASS && dev.subclass == drivers::ahci::AHCI_SUBCLASS {
+            // SAFETY: PCI device is a valid AHCI controller.
+            match unsafe { drivers::ahci::init(dev, hhdm_offset) } {
+                Ok(()) => serial_println!("AHCI: ready"),
+                Err(e) => serial_println!("AHCI: init failed: {}", e),
+            }
+            break;
+        }
+    }
+
     if let Some(blk_dev) = drivers::pci::find_device(
         &pci_devices,
         drivers::pci::VIRTIO_VENDOR,
@@ -383,6 +395,49 @@ fn kernel_main() -> ! {
 
     // VFS tests
     vfs_tests();
+
+    // Initialize shared memory
+    ipc::shm::init();
+    serial_println!("SHM: initialized");
+
+    // Test shared memory
+    {
+        let id = ipc::shm::shmget(42, 4096).expect("shmget failed");
+        let ptr = ipc::shm::shmat(id).expect("shmat failed");
+        // SAFETY: ptr is valid shared memory.
+        unsafe {
+            *ptr = 0xAB;
+            *(ptr.add(1)) = 0xCD;
+        }
+        let ptr2 = ipc::shm::shmat(id).expect("shmat 2 failed");
+        // SAFETY: Same segment, should see the same data.
+        unsafe {
+            assert_eq!(*ptr2, 0xAB);
+            assert_eq!(*(ptr2.add(1)), 0xCD);
+        }
+        ipc::shm::shmdt(id).expect("shmdt failed");
+        serial_println!("TEST shared memory: PASS");
+    }
+
+    // Test signals
+    {
+        use process::signal::{Signal, SignalState};
+        let mut state = SignalState::new();
+        assert!(!state.has_pending());
+        state.send(Signal::SIGINT);
+        assert!(state.has_pending());
+        let sig = state.dequeue().expect("dequeue failed");
+        assert_eq!(sig, Signal::SIGINT);
+        assert!(!state.has_pending());
+
+        // Test masking
+        state.blocked = 1 << (Signal::SIGTERM as u8);
+        state.send(Signal::SIGTERM);
+        assert!(!state.has_pending()); // Blocked
+        state.blocked = 0;
+        assert!(state.has_pending()); // Now deliverable
+        serial_println!("TEST signals: PASS");
+    }
 
     // Run pipe test
     {
