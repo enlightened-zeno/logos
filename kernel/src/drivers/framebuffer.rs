@@ -37,6 +37,12 @@ struct FbConsole {
 unsafe impl Send for FbConsole {}
 
 static FB: SpinLock<Option<FbConsole>> = SpinLock::new(None);
+static FB_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Enable framebuffer output. Call after boot init is complete.
+pub fn activate() {
+    FB_ACTIVE.store(true, core::sync::atomic::Ordering::Release);
+}
 
 /// Initialize the framebuffer console from Limine framebuffer info.
 ///
@@ -51,7 +57,7 @@ pub unsafe fn init(base: u64, width: u32, height: u32, pitch: u32, bpp: u16) {
     let cols = width / FONT_WIDTH;
     let rows = height / FONT_HEIGHT;
 
-    let mut fb = FbConsole {
+    let fb = FbConsole {
         base: base as *mut u32,
         pitch: pitch / 4, // Convert byte pitch to pixel pitch
         width,
@@ -64,8 +70,8 @@ pub unsafe fn init(base: u64, width: u32, height: u32, pitch: u32, bpp: u16) {
         bg: 0x00000000, // Black
     };
 
-    // Clear the screen
-    clear_screen(&mut fb);
+    // Skip clearing — Limine already provides a black framebuffer.
+    // clear_screen is available via the `clear` shell command.
 
     *FB.lock() = Some(fb);
 
@@ -74,6 +80,9 @@ pub unsafe fn init(base: u64, width: u32, height: u32, pitch: u32, bpp: u16) {
 
 /// Write a string to the framebuffer console.
 pub fn write_str(s: &str) {
+    if !FB_ACTIVE.load(core::sync::atomic::Ordering::Acquire) {
+        return;
+    }
     let mut guard = FB.lock();
     let fb = match guard.as_mut() {
         Some(fb) => fb,
@@ -193,6 +202,7 @@ fn scroll_up(fb: &mut FbConsole) {
     }
 }
 
+#[allow(dead_code)]
 fn clear_screen(fb: &mut FbConsole) {
     for y in 0..fb.height {
         for x in 0..fb.width {

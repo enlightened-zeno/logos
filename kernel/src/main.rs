@@ -384,6 +384,9 @@ fn kernel_main() -> ! {
 
     serial_println!("Boot complete. Halting.");
 
+    // Activate framebuffer output now that boot is complete
+    drivers::framebuffer::activate();
+
     // Initialize shell CWD and launch the interactive shell
     shell::builtins::init_cwd();
     shell::run()
