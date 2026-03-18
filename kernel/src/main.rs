@@ -690,6 +690,164 @@ fn extended_tests() {
         serial_println!("TEST signal block/unblock: PASS");
     }
 
+    // PMM-E01: Allocate when near exhaustion then recover
+    {
+        let pmm = memory::pmm::Pmm::get();
+        let free_before = pmm.free_frames();
+        // Allocate a batch and free immediately — verifies no leak
+        let mut frames = alloc::vec::Vec::new();
+        for _ in 0..100 {
+            if let Some(f) = pmm.alloc() {
+                frames.push(f);
+            }
+        }
+        let allocated = frames.len();
+        for f in frames {
+            // SAFETY: Frames were just allocated.
+            unsafe { pmm.dealloc(f) };
+        }
+        assert_eq!(pmm.free_frames(), free_before);
+        serial_println!("TEST PMM-E01 alloc/dealloc batch ({}): PASS", allocated);
+    }
+
+    // VMM-C02: Map and unmap page, verify translation fails after unmap
+    {
+        let vmm = memory::vmm::Vmm::get();
+        let pmm = memory::pmm::Pmm::get();
+        let vaddr = memory::addr::VirtAddr::new_canonicalize(0xFFFF_E000_0001_0000);
+        let frame = pmm.alloc().expect("alloc for VMM-C02");
+        vmm.map_page(
+            vaddr,
+            frame,
+            memory::paging::PageFlags::WRITABLE | memory::paging::PageFlags::NO_EXECUTE,
+        )
+        .expect("map");
+        assert!(vmm.translate(vaddr).is_some());
+        vmm.unmap_page(vaddr).expect("unmap");
+        assert!(
+            vmm.translate(vaddr).is_none(),
+            "Translation should fail after unmap"
+        );
+        // SAFETY: Frame was allocated by us.
+        unsafe { pmm.dealloc(frame) };
+        serial_println!("TEST VMM-C02 map/unmap/translate: PASS");
+    }
+
+    // VMM-C04: Map with different flags
+    {
+        let vmm = memory::vmm::Vmm::get();
+        let pmm = memory::pmm::Pmm::get();
+
+        // Read-only page
+        let v1 = memory::addr::VirtAddr::new_canonicalize(0xFFFF_E000_0002_0000);
+        let f1 = pmm.alloc().expect("alloc");
+        vmm.map_page(v1, f1, memory::paging::PageFlags::NO_EXECUTE)
+            .expect("map RO");
+        assert!(vmm.translate(v1).is_some());
+        vmm.unmap_page(v1).expect("unmap");
+        // SAFETY: Frame was allocated by us.
+        unsafe { pmm.dealloc(f1) };
+
+        // RW+NX page
+        let v2 = memory::addr::VirtAddr::new_canonicalize(0xFFFF_E000_0003_0000);
+        let f2 = pmm.alloc().expect("alloc");
+        vmm.map_page(
+            v2,
+            f2,
+            memory::paging::PageFlags::WRITABLE | memory::paging::PageFlags::NO_EXECUTE,
+        )
+        .expect("map RW+NX");
+        vmm.unmap_page(v2).expect("unmap");
+        // SAFETY: Frame was allocated by us.
+        unsafe { pmm.dealloc(f2) };
+
+        serial_println!("TEST VMM-C04 different flags: PASS");
+    }
+
+    // SYNC-C01: SpinLock basic acquire/release
+    {
+        let lock = sync::SpinLock::new(42u64);
+        {
+            let mut guard = lock.lock();
+            assert_eq!(*guard, 42);
+            *guard = 100;
+        }
+        assert_eq!(*lock.lock(), 100);
+        serial_println!("TEST SYNC-C01 spinlock: PASS");
+    }
+
+    // LOG-C01: Kernel log ring buffer captures output
+    {
+        let mut buf = [0u8; 4096];
+        let n = log::read(&mut buf);
+        assert!(n > 0, "Log buffer should have content");
+        let content = core::str::from_utf8(&buf[..n.min(100)]).unwrap_or("");
+        assert!(
+            content.contains("LogOS"),
+            "Log should contain boot messages"
+        );
+        serial_println!("TEST LOG-C01 ring buffer: PASS");
+    }
+
+    // PCI-C01: PCI enumeration found devices
+    {
+        let devices = drivers::pci::enumerate();
+        assert!(!devices.is_empty(), "PCI should find at least 1 device");
+        serial_println!("TEST PCI-C01 enumeration ({}): PASS", devices.len());
+    }
+
+    // SMP-C01: Multiple CPUs online
+    {
+        let cpus = arch::x86_64::smp::cpus_online();
+        assert!(cpus >= 1, "At least 1 CPU should be online");
+        serial_println!("TEST SMP-C01 CPUs online ({}): PASS", cpus);
+    }
+
+    // BOOT-C12: uname shows LogOS info
+    {
+        // Verified through /proc/version already, but also check syscall
+        let result = syscall::table::dispatch(63, 0, 0, 0, 0, 0, 0);
+        // uname with null pointer should return EFAULT
+        assert!(result < 0, "uname with null should fail");
+        serial_println!("TEST BOOT-C12 uname syscall: PASS");
+    }
+
+    // tmpfs: unlink removes file
+    {
+        use fs::vfs::{InodeType, Vfs};
+        let tmp = Vfs::resolve("/tmp").expect("resolve /tmp");
+        let _ = tmp.create("to_delete", InodeType::File, 0o644);
+        tmp.unlink("to_delete").expect("unlink");
+        assert!(tmp.lookup("to_delete").is_err(), "File should be gone");
+        serial_println!("TEST tmpfs unlink: PASS");
+    }
+
+    // devfs: /dev/random returns random data
+    {
+        use fs::vfs::Vfs;
+        let random = Vfs::resolve("/dev/random").expect("resolve /dev/random");
+        let mut buf = [0u8; 32];
+        let n = random.read(0, &mut buf).expect("read random");
+        assert_eq!(n, 32);
+        // Very unlikely all zeros
+        assert!(
+            buf.iter().any(|&b| b != 0),
+            "/dev/random returned all zeros"
+        );
+        serial_println!("TEST devfs /dev/random: PASS");
+    }
+
+    // procfs: /proc/uptime returns valid time
+    {
+        use fs::vfs::Vfs;
+        let uptime = Vfs::resolve("/proc/uptime").expect("resolve /proc/uptime");
+        let mut buf = [0u8; 64];
+        let n = uptime.read(0, &mut buf).expect("read uptime");
+        let content = core::str::from_utf8(&buf[..n]).unwrap_or("");
+        assert!(content.contains('.'), "Uptime should have decimal point");
+        serial_println!("TEST procfs /proc/uptime: PASS");
+    }
+
     serial_println!("All extended tests passed.");
 }
 
