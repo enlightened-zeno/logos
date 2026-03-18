@@ -327,6 +327,16 @@ fn kernel_main() -> ! {
     fs::vfs::Vfs::mount("/proc", fs::procfs::ProcFs::new());
     fs::vfs::Vfs::mount("/tmp", fs::tmpfs::TmpFs::new());
 
+    // Initialize SMP — boot application processors
+    if let Some(mp_response) = SMP.get_response() {
+        // SAFETY: Called once after GDT/IDT/APIC are initialized.
+        unsafe {
+            arch::x86_64::smp::init(mp_response, hhdm_offset);
+        }
+    } else {
+        serial_println!("SMP: not available (single CPU)");
+    }
+
     // Enumerate PCI devices and initialize VirtIO block if present
     let pci_devices = drivers::pci::enumerate();
     serial_println!("PCI: found {} devices", pci_devices.len());

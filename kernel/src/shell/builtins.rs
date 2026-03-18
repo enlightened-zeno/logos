@@ -307,8 +307,11 @@ pub fn uname() {
 }
 
 pub fn ps() {
+    let cpus = crate::arch::x86_64::smp::cpus_online();
     crate::serial_println!("  PID  STATE    NAME");
     crate::serial_println!("    1  running  kernel");
+    crate::serial_println!();
+    crate::serial_println!("CPUs online: {}", cpus);
 }
 
 pub fn clear() {
