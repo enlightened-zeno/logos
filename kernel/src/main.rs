@@ -563,7 +563,7 @@ fn kernel_main() -> ! {
 
     serial_println!("Boot complete. Halting.");
 
-    // Activate framebuffer output now that boot is complete
+    // Activate framebuffer output for the shell (not during tests — too slow)
     drivers::framebuffer::activate();
 
     // Initialize shell CWD and launch the interactive shell
