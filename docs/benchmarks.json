@@ -1,0 +1,42 @@
+{
+  "version": "0.1.0",
+  "platform": "qemu-system-x86_64 -machine q35 -cpu qemu64 -smp 2 -m 256M",
+  "date": "2026-03-18",
+  "benchmarks": {
+    "PERF-01": {
+      "name": "Boot to shell prompt",
+      "target": "< 3 seconds",
+      "measured": "~20 seconds (with framebuffer)",
+      "status": "above_target",
+      "notes": "Framebuffer rendering dominates; serial-only boot is ~5s"
+    },
+    "PERF-02": {
+      "name": "PMM allocate_frame",
+      "target": "< 200 ns",
+      "measured": "via bench pmm command",
+      "status": "measured_at_runtime"
+    },
+    "PERF-03": {
+      "name": "PMM deallocate_frame",
+      "target": "< 200 ns",
+      "measured": "via bench pmm command",
+      "status": "measured_at_runtime"
+    },
+    "PERF-04": {
+      "name": "Slab allocate 64 bytes",
+      "target": "< 300 ns",
+      "measured": "via bench slab command",
+      "status": "measured_at_runtime"
+    },
+    "PERF-12": {
+      "name": "Pipe throughput",
+      "target": "> 200 MB/s",
+      "measured": "via bench pipe command",
+      "status": "measured_at_runtime"
+    }
+  },
+  "regression_policy": {
+    "warning_threshold": "20%",
+    "block_threshold": "50%"
+  }
+}

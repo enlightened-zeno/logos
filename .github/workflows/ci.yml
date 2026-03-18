@@ -59,15 +59,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 ovmf mtools
-      - name: Build kernel
-        run: cargo build
-      - name: Fetch Limine bootloader
-        run: ./tools/fetch-limine.sh
-      - name: Create boot image
-        run: ./tools/mkimage-noroot.sh
-      - name: Run kernel boot test
+          sudo apt-get install -y qemu-system-x86 ovmf mtools python3
+      - name: Build and create image
         run: |
+          cargo build
+          ./tools/fetch-limine.sh
+          ./tools/mkimage-noroot.sh
+      - name: Run kernel boot tests
+        run: |
+          OVMF=""
           for candidate in \
             /usr/share/OVMF/OVMF_CODE.fd \
             /usr/share/OVMF/OVMF_CODE_4M.fd \
@@ -91,9 +91,10 @@ jobs:
           echo "=== Serial output ==="
           strings build/serial.log | grep -v '^\[' | grep -v '^BdsDxe' || true
           echo "=== Validating ==="
+          PASS=$(strings build/serial.log | grep -c "PASS")
+          echo "Tests passed: $PASS"
           grep -q "Boot complete. Halting." build/serial.log
           grep -q "All memory tests passed." build/serial.log
-          grep -q "TEST APIC timer ticking: PASS" build/serial.log
-          grep -q "TEST entropy: PASS" build/serial.log
-          grep -q "TEST pipe read/write/EOF: PASS" build/serial.log
-          echo "Kernel boot test passed."
+          grep -q "All VFS tests passed." build/serial.log
+          grep -q "All extended tests passed." build/serial.log
+          echo "Kernel boot test passed ($PASS tests)."

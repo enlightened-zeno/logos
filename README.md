@@ -11,5 +11,12 @@ make build
 ## Run
 
 ```
+make image
 make run
+```
+
+## Test
+
+```
+make test
 ```
