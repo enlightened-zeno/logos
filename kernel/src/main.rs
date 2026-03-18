@@ -10,6 +10,9 @@ mod arch;
 mod entropy;
 #[allow(dead_code)]
 mod fs;
+#[allow(dead_code)]
+mod ipc;
+mod log;
 mod memory;
 mod panic;
 #[allow(dead_code)]
@@ -370,6 +373,23 @@ fn kernel_main() -> ! {
 
     // VFS tests
     vfs_tests();
+
+    // Run pipe test
+    {
+        use fs::vfs::Inode;
+        use ipc::pipe::Pipe;
+
+        let (reader, writer) = Pipe::create();
+        let written = writer.write(0, b"pipe works").expect("pipe write");
+        assert_eq!(written, 10);
+        let mut buf = [0u8; 32];
+        let read = reader.read(0, &mut buf).expect("pipe read");
+        assert_eq!(&buf[..read], b"pipe works");
+        drop(writer);
+        let read = reader.read(0, &mut buf).expect("pipe eof");
+        assert_eq!(read, 0);
+        serial_println!("TEST pipe read/write/EOF: PASS");
+    }
 
     // Run memory integration tests
     memory_tests();

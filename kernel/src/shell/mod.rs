@@ -128,6 +128,8 @@ fn execute(cmd: &str, args: &[String]) {
         "dmesg" => builtins::dmesg(),
         "shutdown" | "halt" => builtins::shutdown(),
         "reboot" => builtins::reboot(),
+        "pipe-test" => builtins::pipe_test(),
+        "stress" => builtins::stress_test(args),
         _ => {
             crate::serial_println!("lsh: {}: command not found", cmd);
         }

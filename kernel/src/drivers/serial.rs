@@ -115,7 +115,24 @@ macro_rules! serial_println {
 #[doc(hidden)]
 pub fn _serial_print(args: fmt::Arguments) {
     use fmt::Write;
+
+    // Write to serial
     SERIAL1.lock().write_fmt(args).unwrap();
+
+    // Capture to kernel log ring buffer
+    let mut log_buf = LogCapture;
+    let _ = log_buf.write_fmt(args);
+
     // Dual output to framebuffer console
     let _ = crate::drivers::framebuffer::FbWriter.write_fmt(args);
+}
+
+/// Helper to capture formatted output into the log buffer.
+struct LogCapture;
+
+impl fmt::Write for LogCapture {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        crate::log::append(s.as_bytes());
+        Ok(())
+    }
 }

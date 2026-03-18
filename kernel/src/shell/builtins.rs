@@ -49,6 +49,8 @@ pub fn help() {
     crate::serial_println!("  hexdump <file>    Hex dump of file");
     crate::serial_println!("  dmesg             Show kernel log");
     crate::serial_println!("  clear             Clear screen");
+    crate::serial_println!("  pipe-test         Test pipe IPC");
+    crate::serial_println!("  stress [test]     Run stress tests (alloc, vfs, pipe, all)");
     crate::serial_println!("  shutdown          Power off");
     crate::serial_println!("  reboot            Restart");
 }
@@ -360,7 +362,11 @@ pub fn hexdump(args: &[String]) {
 }
 
 pub fn dmesg() {
-    crate::serial_println!("(kernel log buffer not yet implemented)");
+    let mut buf = [0u8; 4096];
+    let n = crate::log::read(&mut buf);
+    for &byte in &buf[..n] {
+        crate::drivers::serial::write_byte(byte);
+    }
 }
 
 pub fn shutdown() {
@@ -381,4 +387,186 @@ pub fn reboot() {
     loop {
         crate::arch::x86_64::cpu::hlt();
     }
+}
+
+pub fn pipe_test() {
+    use crate::fs::vfs::Inode;
+    use crate::ipc::pipe::Pipe;
+
+    let (reader, writer) = Pipe::create();
+
+    // Write some data
+    let data = b"Hello through the pipe!";
+    let written = writer.write(0, data).expect("pipe write failed");
+    assert_eq!(written, data.len());
+
+    // Read it back
+    let mut buf = [0u8; 64];
+    let read = reader.read(0, &mut buf).expect("pipe read failed");
+    assert_eq!(read, data.len());
+    assert_eq!(&buf[..read], data);
+
+    // Drop writer → reader should get EOF
+    drop(writer);
+    let read = reader
+        .read(0, &mut buf)
+        .expect("pipe read after close failed");
+    assert_eq!(read, 0);
+
+    crate::serial_println!("Pipe test: PASS");
+}
+
+pub fn stress_test(args: &[String]) {
+    let test = if args.is_empty() { "all" } else { &args[0] };
+
+    match test {
+        "alloc" => stress_alloc(),
+        "vfs" => stress_vfs(),
+        "pipe" => stress_pipe(),
+        "all" => {
+            stress_alloc();
+            stress_vfs();
+            stress_pipe();
+        }
+        _ => crate::serial_println!(
+            "stress: unknown test '{}'. Try: alloc, vfs, pipe, all",
+            test
+        ),
+    }
+}
+
+fn stress_alloc() {
+    extern crate alloc;
+    use alloc::vec::Vec;
+
+    crate::serial_println!("Stress: allocating 1000 vectors...");
+    let pmm = crate::memory::pmm::Pmm::get();
+    let free_before = pmm.free_frames();
+
+    let mut vecs: Vec<Vec<u8>> = Vec::new();
+    for i in 0u16..1000 {
+        let size = 64 + (i as usize % 16) * 128;
+        let mut v = Vec::with_capacity(size);
+        for j in 0..size {
+            v.push((i as u8).wrapping_add(j as u8));
+        }
+        vecs.push(v);
+    }
+
+    // Verify patterns
+    for (i, v) in vecs.iter().enumerate() {
+        let i = i as u16;
+        let size = 64 + (i as usize % 16) * 128;
+        assert_eq!(v.len(), size, "size mismatch at {}", i);
+        for (j, &byte) in v.iter().enumerate() {
+            assert_eq!(
+                byte,
+                (i as u8).wrapping_add(j as u8),
+                "pattern mismatch at vec {} byte {}",
+                i,
+                j
+            );
+        }
+    }
+
+    drop(vecs);
+
+    let free_after = pmm.free_frames();
+    let leaked = free_before.saturating_sub(free_after);
+    crate::serial_println!(
+        "Stress alloc: 1000 vecs created, verified, freed. Leaked frames: {}",
+        leaked
+    );
+    if leaked > 30 {
+        crate::serial_println!("WARNING: significant frame leak detected");
+    } else {
+        crate::serial_println!("Stress alloc: PASS");
+    }
+}
+
+fn stress_vfs() {
+    use crate::fs::vfs::{InodeType, Vfs};
+
+    crate::serial_println!("Stress: creating 100 files in /tmp...");
+
+    let tmp = Vfs::resolve("/tmp").expect("resolve /tmp");
+
+    // Create 100 files
+    for i in 0..100 {
+        let name = alloc::format!("stress_{:04}", i);
+        let file = tmp
+            .create(&name, InodeType::File, 0o644)
+            .expect("create failed");
+        let data = alloc::format!("content of file {}", i);
+        file.write(0, data.as_bytes()).expect("write failed");
+    }
+
+    // Read them all back
+    for i in 0..100 {
+        let name = alloc::format!("stress_{:04}", i);
+        let file = tmp.lookup(&name).expect("lookup failed");
+        let mut buf = [0u8; 64];
+        let n = file.read(0, &mut buf).expect("read failed");
+        let expected = alloc::format!("content of file {}", i);
+        assert_eq!(
+            &buf[..n],
+            expected.as_bytes(),
+            "content mismatch for file {}",
+            i
+        );
+    }
+
+    // Delete them all
+    for i in 0..100 {
+        let name = alloc::format!("stress_{:04}", i);
+        tmp.unlink(&name).expect("unlink failed");
+    }
+
+    // Verify they're gone
+    let entries = tmp.readdir().expect("readdir");
+    let remaining = entries
+        .iter()
+        .filter(|e| e.name.starts_with("stress_"))
+        .count();
+    assert_eq!(remaining, 0, "files not cleaned up");
+
+    crate::serial_println!("Stress VFS: 100 files created, read, verified, deleted. PASS");
+}
+
+fn stress_pipe() {
+    use crate::fs::vfs::Inode;
+    use crate::ipc::pipe::Pipe;
+
+    crate::serial_println!("Stress: pipe throughput...");
+
+    let (reader, writer) = Pipe::create();
+    let total_bytes: usize = 256 * 1024; // 256 KiB
+    let mut written_total = 0;
+    let mut read_total = 0;
+
+    // Write and read in alternating chunks
+    let write_data = [0xABu8; 4096];
+    let mut read_buf = [0u8; 4096];
+
+    while written_total < total_bytes {
+        let w = writer.write(0, &write_data).expect("pipe write");
+        written_total += w;
+
+        let r = reader.read(0, &mut read_buf).expect("pipe read");
+        read_total += r;
+        assert!(read_buf[..r].iter().all(|&b| b == 0xAB), "data corruption");
+    }
+
+    // Drain remaining
+    drop(writer);
+    loop {
+        let r = reader.read(0, &mut read_buf).expect("pipe drain");
+        if r == 0 {
+            break;
+        }
+        read_total += r;
+    }
+
+    assert_eq!(written_total, read_total, "byte count mismatch");
+    crate::serial_println!("Stress pipe: {} KiB transferred. PASS", read_total / 1024);
 }

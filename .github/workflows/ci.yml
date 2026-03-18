@@ -95,4 +95,5 @@ jobs:
           grep -q "All memory tests passed." build/serial.log
           grep -q "TEST APIC timer ticking: PASS" build/serial.log
           grep -q "TEST entropy: PASS" build/serial.log
+          grep -q "TEST pipe read/write/EOF: PASS" build/serial.log
           echo "Kernel boot test passed."
