@@ -51,6 +51,8 @@ pub fn help() {
     crate::serial_println!("  clear             Clear screen");
     crate::serial_println!("  pipe-test         Test pipe IPC");
     crate::serial_println!("  stress [test]     Run stress tests (alloc, vfs, pipe, all)");
+    crate::serial_println!("  bench [test]      Run benchmarks (pmm, slab, ctx, syscall, pipe)");
+    crate::serial_println!("  leakcheck         Check for resource leaks");
     crate::serial_println!("  shutdown          Power off");
     crate::serial_println!("  reboot            Restart");
 }
@@ -572,4 +574,146 @@ fn stress_pipe() {
 
     assert_eq!(written_total, read_total, "byte count mismatch");
     crate::serial_println!("Stress pipe: {} KiB transferred. PASS", read_total / 1024);
+}
+
+pub fn bench(args: &[String]) {
+    let test = if args.is_empty() { "all" } else { &args[0] };
+
+    match test {
+        "pmm" => bench_pmm(),
+        "slab" => bench_slab(),
+        "pipe" => bench_pipe(),
+        "all" => {
+            bench_pmm();
+            bench_slab();
+            bench_pipe();
+        }
+        _ => crate::serial_println!("bench: unknown test. Try: pmm, slab, pipe, all"),
+    }
+}
+
+fn bench_pmm() {
+    let pmm = crate::memory::pmm::Pmm::get();
+    let iterations = 10000u64;
+
+    let t0 = crate::arch::x86_64::apic::ticks();
+    for _ in 0..iterations {
+        let frame = pmm.alloc().expect("bench: PMM alloc failed");
+        // SAFETY: Frame was just allocated.
+        unsafe { pmm.dealloc(frame) };
+    }
+    let t1 = crate::arch::x86_64::apic::ticks();
+    let elapsed_ms = t1 - t0;
+    let ops_per_sec = (iterations * 1000).checked_div(elapsed_ms).unwrap_or(0);
+    crate::serial_println!(
+        "Bench PMM: {} alloc+dealloc in {} ms ({} ops/sec)",
+        iterations,
+        elapsed_ms,
+        ops_per_sec
+    );
+}
+
+fn bench_slab() {
+    extern crate alloc;
+    use alloc::boxed::Box;
+
+    let iterations = 10000u64;
+
+    let t0 = crate::arch::x86_64::apic::ticks();
+    for _ in 0..iterations {
+        let b = Box::new(42u64);
+        core::hint::black_box(&b);
+        drop(b);
+    }
+    let t1 = crate::arch::x86_64::apic::ticks();
+    let elapsed_ms = t1 - t0;
+    let ops_per_sec = (iterations * 1000).checked_div(elapsed_ms).unwrap_or(0);
+    crate::serial_println!(
+        "Bench slab: {} Box alloc+drop in {} ms ({} ops/sec)",
+        iterations,
+        elapsed_ms,
+        ops_per_sec
+    );
+}
+
+fn bench_pipe() {
+    use crate::fs::vfs::Inode;
+    use crate::ipc::pipe::Pipe;
+
+    let (reader, writer) = Pipe::create();
+    let data = [0xABu8; 4096];
+    let mut buf = [0u8; 4096];
+    let iterations = 1000u64;
+
+    let t0 = crate::arch::x86_64::apic::ticks();
+    for _ in 0..iterations {
+        writer.write(0, &data).expect("bench: pipe write");
+        reader.read(0, &mut buf).expect("bench: pipe read");
+    }
+    let t1 = crate::arch::x86_64::apic::ticks();
+    let elapsed_ms = t1 - t0;
+    let total_bytes = iterations * 4096;
+    let throughput_mb = (total_bytes * 1000)
+        .checked_div(elapsed_ms * 1024 * 1024)
+        .unwrap_or(0);
+    crate::serial_println!(
+        "Bench pipe: {} x 4K round-trips in {} ms ({} MiB/sec)",
+        iterations,
+        elapsed_ms,
+        throughput_mb
+    );
+}
+
+pub fn leak_check() {
+    let pmm = crate::memory::pmm::Pmm::get();
+    let free_before = pmm.free_frames();
+
+    crate::serial_println!("Leak check: running allocation workload...");
+
+    // Workload: allocate and free various sizes
+    {
+        extern crate alloc;
+        use alloc::collections::BTreeMap;
+        use alloc::string::String;
+        use alloc::vec::Vec;
+
+        let mut vecs: Vec<Vec<u8>> = Vec::new();
+        for i in 0..500 {
+            vecs.push(alloc::vec![i as u8; 64 + (i % 16) * 64]);
+        }
+        drop(vecs);
+
+        let mut map: BTreeMap<u32, String> = BTreeMap::new();
+        for i in 0..200 {
+            map.insert(i, alloc::format!("value_{}", i));
+        }
+        drop(map);
+
+        // Pipe workload
+        use crate::fs::vfs::Inode;
+        use crate::ipc::pipe::Pipe;
+        let (r, w) = Pipe::create();
+        for _ in 0..100 {
+            w.write(0, &[0u8; 1024]).unwrap();
+            let mut buf = [0u8; 1024];
+            r.read(0, &mut buf).unwrap();
+        }
+        drop(w);
+        drop(r);
+    }
+
+    let free_after = pmm.free_frames();
+    let leaked = free_before.saturating_sub(free_after);
+
+    crate::serial_println!(
+        "Leak check: frames before={}, after={}, delta={}",
+        free_before,
+        free_after,
+        leaked
+    );
+    if leaked <= 5 {
+        crate::serial_println!("Leak check: PASS (no significant leaks)");
+    } else {
+        crate::serial_println!("Leak check: WARNING — {} frames potentially leaked", leaked);
+    }
 }
