@@ -1608,6 +1608,118 @@ fn data_integrity_tests() {
         serial_println!("TEST procfs /proc/mounts: PASS");
     }
 
+    serial_println!("Starting final batch...");
+
+    // ELF-C05: Entry point within .text
+    {
+        static USER_ELF: &[u8] = include_bytes!("test_user_program.bin");
+        let info = process::elf::parse(USER_ELF).expect("parse");
+        let seg = &info.segments[0];
+        assert!(
+            info.entry_point >= seg.vaddr && info.entry_point < seg.vaddr + seg.memsz,
+            "Entry not in .text"
+        );
+        serial_println!("TEST ELF-C05 entry in .text: PASS");
+    }
+
+    // ELF-E09: ARM ELF rejected
+    {
+        let mut elf = [0u8; 64];
+        elf[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+        elf[4] = 2; // 64-bit
+        elf[5] = 1; // little-endian
+        elf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        elf[18..20].copy_from_slice(&183u16.to_le_bytes()); // EM_AARCH64
+        assert!(process::elf::parse(&elf).is_err());
+        serial_println!("TEST ELF-E09 ARM rejected: PASS");
+    }
+
+    // ELF-E10: Truncated ELF
+    {
+        let elf = [0x7F, b'E', b'L', b'F', 2, 1, 0, 0];
+        assert!(process::elf::parse(&elf).is_err());
+        serial_println!("TEST ELF-E10 truncated: PASS");
+    }
+
+    // Pipe: multiple writes then read all
+    {
+        use fs::vfs::Inode;
+        let (reader, writer) = ipc::pipe::Pipe::create();
+        writer.write(0, b"aaa").expect("w1");
+        writer.write(0, b"bbb").expect("w2");
+        writer.write(0, b"ccc").expect("w3");
+        let mut buf = [0u8; 32];
+        let n = reader.read(0, &mut buf).expect("read");
+        assert_eq!(&buf[..n], b"aaabbbccc");
+        serial_println!("TEST pipe multi-write: PASS");
+    }
+
+    // tmpfs: overwrite file content
+    {
+        use fs::vfs::{InodeType, Vfs};
+        let root = Vfs::resolve("/tmp").expect("/tmp");
+        let f = root
+            .create("overwrite_test", InodeType::File, 0o644)
+            .expect("create");
+        f.write(0, b"original").expect("write1");
+        f.write(0, b"REPLACED").expect("write2");
+        let mut buf = [0u8; 16];
+        let n = f.read(0, &mut buf).expect("read");
+        assert_eq!(&buf[..n], b"REPLACED");
+        root.unlink("overwrite_test").expect("unlink");
+        serial_println!("TEST tmpfs overwrite: PASS");
+    }
+
+    // Signal: default actions
+    {
+        use process::signal::{Signal, SignalAction};
+        assert_eq!(Signal::SIGKILL.default_action(), SignalAction::Terminate);
+        assert_eq!(Signal::SIGCHLD.default_action(), SignalAction::Ignore);
+        assert_eq!(Signal::SIGSTOP.default_action(), SignalAction::Stop);
+        assert_eq!(Signal::SIGCONT.default_action(), SignalAction::Continue);
+        serial_println!("TEST signal default actions: PASS");
+    }
+
+    // Address space: user stack mapping
+    {
+        use process::address_space::AddressSpace;
+        let hhdm = unsafe { memory::vmm::layout::PHYS_MEM_OFFSET };
+        let addr_space = AddressSpace::new(hhdm).expect("new");
+        addr_space.map_user_stack().expect("map stack");
+        let mapper = memory::paging::PageMapper::new(addr_space.pml4_frame, hhdm);
+        let stack_page = memory::addr::VirtAddr::new(process::address_space::USER_STACK_TOP - 4096);
+        assert!(mapper.translate(stack_page).is_some(), "Stack not mapped");
+        serial_println!("TEST address space user stack: PASS");
+    }
+
+    // SYS-C07: sys_write to stdout
+    {
+        let msg = b"syscall write test";
+        let result = syscall::table::dispatch(1, 1, msg.as_ptr() as u64, msg.len() as u64, 0, 0, 0);
+        // This will fail with EFAULT because the pointer is in kernel space
+        // and our validation rejects it. That's correct behavior.
+        assert!(result < 0, "Kernel pointer write should be rejected");
+        serial_println!("TEST SYS-C07 write validation: PASS");
+    }
+
+    // VFS: resolve nonexistent path returns ENOENT
+    {
+        use fs::vfs::Vfs;
+        let result = Vfs::resolve("/nonexistent/path");
+        assert!(result.is_err());
+        serial_println!("TEST VFS ENOENT: PASS");
+    }
+
+    // devfs: /dev/zero read fills zeros
+    {
+        use fs::vfs::Vfs;
+        let zero = Vfs::resolve("/dev/zero").expect("/dev/zero");
+        let mut buf = [0xFFu8; 64];
+        zero.read(0, &mut buf).expect("read");
+        assert!(buf.iter().all(|&b| b == 0));
+        serial_println!("TEST devfs /dev/zero fill: PASS");
+    }
+
     serial_println!("All data integrity tests passed.");
 }
 
