@@ -1,4 +1,6 @@
+pub mod address_space;
 pub mod elf;
+pub mod exec;
 pub mod signal;
 pub mod task;
 

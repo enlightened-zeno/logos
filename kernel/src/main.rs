@@ -426,6 +426,21 @@ fn kernel_main() -> ! {
         serial_println!("TEST waitqueue: PASS");
     }
 
+    // Test user address space creation
+    {
+        use process::address_space::AddressSpace;
+        let addr_space = AddressSpace::new(hhdm_offset).expect("AddressSpace::new failed");
+        // Verify kernel mappings are present
+        let mapper = memory::paging::PageMapper::new(addr_space.pml4_frame, hhdm_offset);
+        // Kernel code should be mapped (our current RIP is in kernel space)
+        let kernel_virt = memory::addr::VirtAddr::new(0xFFFFFFFF80000000);
+        assert!(
+            mapper.translate(kernel_virt).is_some(),
+            "Kernel not mapped in new address space"
+        );
+        serial_println!("TEST address space creation: PASS");
+    }
+
     // Test signals
     {
         use process::signal::{Signal, SignalState};
