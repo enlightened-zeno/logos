@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-03-01
+          components: rust-src, llvm-tools-preview, clippy, rustfmt
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+      - name: Unsafe audit
+        run: ./scripts/check-unsafe-audit.sh
+
+  build:
+    name: Build Kernel
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-03-01
+          components: rust-src, llvm-tools-preview
+      - name: Build kernel (debug)
+        run: cargo build
+      - name: Build kernel (release)
+        run: cargo build --release
+
+  test-kernel:
+    name: "Kernel Tests (SMP=${{ matrix.smp }}, RAM=${{ matrix.memory }})"
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        smp: [1, 2]
+        memory: ["64M", "256M"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-03-01
+          components: rust-src, llvm-tools-preview
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86
+      - name: Run in-kernel tests
+        env:
+          QEMU_SMP: ${{ matrix.smp }}
+          QEMU_MEM: ${{ matrix.memory }}
+        run: cargo test --target x86_64-logos.json
