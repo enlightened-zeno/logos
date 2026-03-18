@@ -8,6 +8,8 @@ mod drivers;
 mod arch;
 #[allow(dead_code)]
 mod entropy;
+#[allow(dead_code)]
+mod fs;
 mod memory;
 mod panic;
 #[allow(dead_code)]
@@ -293,6 +295,16 @@ fn kernel_main() -> ! {
         "Test task did not run"
     );
 
+    // Initialize VFS and mount filesystems
+    fs::vfs::Vfs::init();
+    fs::vfs::Vfs::mount("/", fs::tmpfs::TmpFs::new());
+    fs::vfs::Vfs::mount("/dev", fs::devfs::DevFs::new());
+    fs::vfs::Vfs::mount("/proc", fs::procfs::ProcFs::new());
+    fs::vfs::Vfs::mount("/tmp", fs::tmpfs::TmpFs::new());
+
+    // VFS tests
+    vfs_tests();
+
     // Run memory integration tests
     memory_tests();
 
@@ -307,6 +319,73 @@ fn kernel_main() -> ! {
     serial_println!("Boot complete. Halting.");
 
     halt_loop()
+}
+
+fn vfs_tests() {
+    use fs::vfs::{InodeType, Vfs};
+
+    // Test: resolve root
+    let root = Vfs::resolve("/").expect("resolve / failed");
+    assert_eq!(root.inode_type(), InodeType::Directory);
+    serial_println!("TEST VFS resolve root: PASS");
+
+    // Test: resolve /dev/null
+    let null = Vfs::resolve("/dev/null").expect("resolve /dev/null failed");
+    assert_eq!(null.inode_type(), InodeType::CharDevice);
+    serial_println!("TEST VFS resolve /dev/null: PASS");
+
+    // Test: write and read /dev/null
+    let written = null.write(0, b"discarded").expect("write to null failed");
+    assert_eq!(written, 9);
+    let mut buf = [0u8; 16];
+    let read = null.read(0, &mut buf).expect("read from null failed");
+    assert_eq!(read, 0); // EOF
+    serial_println!("TEST /dev/null read/write: PASS");
+
+    // Test: /dev/zero
+    let zero = Vfs::resolve("/dev/zero").expect("resolve /dev/zero failed");
+    let mut buf = [0xFFu8; 32];
+    let read = zero.read(0, &mut buf).expect("read from zero failed");
+    assert_eq!(read, 32);
+    assert!(buf.iter().all(|&b| b == 0));
+    serial_println!("TEST /dev/zero: PASS");
+
+    // Test: tmpfs create, write, read
+    let root = Vfs::resolve("/tmp").expect("resolve /tmp failed");
+    let file = root
+        .create("hello.txt", InodeType::File, 0o644)
+        .expect("create file failed");
+    let written = file.write(0, b"Hello, LogOS!").expect("write failed");
+    assert_eq!(written, 13);
+    let mut buf = [0u8; 32];
+    let read = file.read(0, &mut buf).expect("read failed");
+    assert_eq!(read, 13);
+    assert_eq!(&buf[..13], b"Hello, LogOS!");
+    serial_println!("TEST tmpfs create/write/read: PASS");
+
+    // Test: tmpfs readdir
+    let entries = root.readdir().expect("readdir failed");
+    assert!(entries.iter().any(|e| e.name == "hello.txt"));
+    serial_println!("TEST tmpfs readdir: PASS");
+
+    // Test: /proc/version
+    let version = Vfs::resolve("/proc/version").expect("resolve /proc/version failed");
+    let mut buf = [0u8; 64];
+    let read = version.read(0, &mut buf).expect("read version failed");
+    let content = core::str::from_utf8(&buf[..read]).expect("invalid utf8");
+    assert!(content.contains("LogOS"));
+    serial_println!("TEST /proc/version: PASS");
+
+    // Test: /proc/meminfo
+    let meminfo = Vfs::resolve("/proc/meminfo").expect("resolve /proc/meminfo failed");
+    let mut buf = [0u8; 256];
+    let read = meminfo.read(0, &mut buf).expect("read meminfo failed");
+    let content = core::str::from_utf8(&buf[..read]).expect("invalid utf8");
+    assert!(content.contains("MemTotal"));
+    assert!(content.contains("MemFree"));
+    serial_println!("TEST /proc/meminfo: PASS");
+
+    serial_println!("All VFS tests passed.");
 }
 
 fn memory_tests() {
