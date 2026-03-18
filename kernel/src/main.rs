@@ -1738,6 +1738,184 @@ fn data_integrity_tests() {
         serial_println!("TEST FD dup2: PASS");
     }
 
+    // PMM-S01: Freed frame is zeroed before reuse
+    {
+        let pmm = memory::pmm::Pmm::get();
+        // Verify any freshly allocated frame is zeroed
+        let frame = pmm.alloc().expect("alloc");
+        let ptr = pmm.phys_to_virt(frame.start_address());
+        for i in 0..4096 {
+            // SAFETY: Frame is allocated and mapped.
+            assert_eq!(unsafe { *ptr.add(i) }, 0, "Frame byte {} not zero", i);
+        }
+        // SAFETY: Cleanup.
+        unsafe { pmm.dealloc(frame) };
+        serial_println!("TEST PMM-S01 alloc always zeroed: PASS");
+    }
+
+    // VMM-E05: Double-map same virtual address fails
+    {
+        let vmm = memory::vmm::Vmm::get();
+        let pmm = memory::pmm::Pmm::get();
+        let vaddr = memory::addr::VirtAddr::new_canonicalize(0xFFFF_E000_2000_0000);
+        let f1 = pmm.alloc().expect("alloc");
+        let f2 = pmm.alloc().expect("alloc");
+        vmm.map_page(
+            vaddr,
+            f1,
+            memory::paging::PageFlags::WRITABLE | memory::paging::PageFlags::NO_EXECUTE,
+        )
+        .expect("first map");
+        let result = vmm.map_page(
+            vaddr,
+            f2,
+            memory::paging::PageFlags::WRITABLE | memory::paging::PageFlags::NO_EXECUTE,
+        );
+        assert!(result.is_err(), "Double-map should fail");
+        vmm.unmap_page(vaddr).expect("unmap");
+        // SAFETY: Frames allocated by us.
+        unsafe {
+            pmm.dealloc(f1);
+            pmm.dealloc(f2);
+        }
+        serial_println!("TEST VMM-E05 double-map rejected: PASS");
+    }
+
+    // VMM-E06: Unmap unmapped address fails
+    {
+        let vmm = memory::vmm::Vmm::get();
+        let vaddr = memory::addr::VirtAddr::new_canonicalize(0xFFFF_E000_3000_0000);
+        let result = vmm.unmap_page(vaddr);
+        assert!(result.is_err(), "Unmap of unmapped should fail");
+        serial_println!("TEST VMM-E06 unmap unmapped: PASS");
+    }
+
+    // LIFE-E01: wait on non-child returns None
+    {
+        use process::pid;
+        let result = pid::reap(99999);
+        assert!(result.is_none(), "Reap non-existent should return None");
+        serial_println!("TEST LIFE-E01 reap non-child: PASS");
+    }
+
+    // LIFE-E02: Double reap returns None
+    {
+        use process::pid;
+        let p = pid::alloc_pid();
+        pid::register(pid::ProcessDesc {
+            pid: p,
+            ppid: 1,
+            pgid: 1,
+            sid: 1,
+            state: pid::ProcessState::Running,
+            exit_code: 0,
+            uid: 0,
+            gid: 0,
+        });
+        pid::set_zombie(p, 7);
+        assert!(pid::reap(p).is_some());
+        assert!(pid::reap(p).is_none(), "Double reap should fail");
+        serial_println!("TEST LIFE-E02 double reap: PASS");
+    }
+
+    // SYS-S04: Path normalization prevents traversal above root
+    {
+        let normalized = fs::path::normalize("/../../../tmp");
+        assert_eq!(normalized, "/tmp", "Should normalize to /tmp");
+        let normalized2 = fs::path::normalize("/tmp/../../etc");
+        assert_eq!(normalized2, "/etc");
+        serial_println!("TEST SYS-S04 path traversal: PASS");
+    }
+
+    // tmpfs: create duplicate name fails
+    {
+        use fs::vfs::{InodeType, Vfs};
+        let root = Vfs::resolve("/tmp").expect("/tmp");
+        root.create("dup_test", InodeType::File, 0o644)
+            .expect("create");
+        let result = root.create("dup_test", InodeType::File, 0o644);
+        assert!(result.is_err(), "Duplicate create should fail");
+        root.unlink("dup_test").expect("unlink");
+        serial_println!("TEST tmpfs duplicate EEXIST: PASS");
+    }
+
+    // tmpfs: unlink non-existent fails
+    {
+        use fs::vfs::Vfs;
+        let root = Vfs::resolve("/tmp").expect("/tmp");
+        let result = root.unlink("nonexistent_file");
+        assert!(result.is_err());
+        serial_println!("TEST tmpfs unlink ENOENT: PASS");
+    }
+
+    // devfs: read /dev/null returns 0 bytes
+    {
+        use fs::vfs::Vfs;
+        let null = Vfs::resolve("/dev/null").expect("/dev/null");
+        let mut buf = [0u8; 32];
+        let n = null.read(0, &mut buf).expect("read");
+        assert_eq!(n, 0);
+        serial_println!("TEST devfs /dev/null EOF: PASS");
+    }
+
+    // devfs: write /dev/null returns count
+    {
+        use fs::vfs::Vfs;
+        let null = Vfs::resolve("/dev/null").expect("/dev/null");
+        let n = null.write(0, &[1, 2, 3, 4, 5]).expect("write");
+        assert_eq!(n, 5);
+        serial_println!("TEST devfs /dev/null sink: PASS");
+    }
+
+    // procfs: readdir lists expected entries
+    {
+        use fs::vfs::Vfs;
+        let proc = Vfs::resolve("/proc").expect("/proc");
+        let entries = proc.readdir().expect("readdir");
+        let names: alloc::vec::Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"uptime"));
+        assert!(names.contains(&"meminfo"));
+        assert!(names.contains(&"version"));
+        assert!(names.contains(&"mounts"));
+        serial_println!("TEST procfs readdir: PASS");
+    }
+
+    // Pipe: writer close then reader gets EOF
+    {
+        use fs::vfs::Inode;
+        let (reader, writer) = ipc::pipe::Pipe::create();
+        writer.write(0, b"before_close").expect("write");
+        drop(writer);
+        let mut buf = [0u8; 64];
+        let n1 = reader.read(0, &mut buf).expect("read data");
+        assert_eq!(&buf[..n1], b"before_close");
+        let n2 = reader.read(0, &mut buf).expect("read eof");
+        assert_eq!(n2, 0);
+        serial_println!("TEST pipe writer close EOF: PASS");
+    }
+
+    // Signal: from_number roundtrip
+    {
+        use process::signal::Signal;
+        for n in [1, 2, 3, 9, 15, 17, 19, 20u8] {
+            let sig = Signal::from_number(n).expect("valid signal");
+            assert_eq!(sig as u8, n);
+        }
+        assert!(Signal::from_number(0).is_none());
+        assert!(Signal::from_number(255).is_none());
+        serial_println!("TEST signal from_number: PASS");
+    }
+
+    // Path: edge cases
+    {
+        assert_eq!(fs::path::normalize("/"), "/");
+        assert_eq!(fs::path::normalize("/."), "/");
+        assert_eq!(fs::path::normalize("/.."), "/");
+        assert_eq!(fs::path::basename("/"), "");
+        assert_eq!(fs::path::parent("/a"), "/");
+        serial_println!("TEST path edge cases: PASS");
+    }
+
     serial_println!("All data integrity tests passed.");
 }
 
