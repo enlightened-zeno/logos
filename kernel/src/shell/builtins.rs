@@ -403,6 +403,68 @@ pub fn reboot() {
     }
 }
 
+pub fn run_user_program() {
+    extern crate alloc;
+    use crate::memory::paging::PageFlags;
+    use crate::process::address_space::AddressSpace;
+
+    static USER_ELF: &[u8] = include_bytes!("../test_user_program.bin");
+
+    let info = crate::process::elf::parse(USER_ELF).expect("ELF parse failed");
+    let hhdm = unsafe { crate::memory::vmm::layout::PHYS_MEM_OFFSET };
+    let addr_space = AddressSpace::new(hhdm).expect("address space");
+
+    for seg in &info.segments {
+        let mut flags = PageFlags::USER;
+        if seg.is_writable() {
+            flags |= PageFlags::WRITABLE;
+        }
+        if !seg.is_executable() {
+            flags |= PageFlags::NO_EXECUTE;
+        }
+        addr_space
+            .load_segment(
+                seg.vaddr,
+                &USER_ELF[seg.offset as usize..(seg.offset + seg.filesz) as usize],
+                seg.memsz,
+                flags,
+            )
+            .expect("load segment");
+    }
+
+    addr_space.map_user_stack().expect("map user stack");
+
+    // Set up kernel stack for syscall return
+    let kernel_stack = alloc::vec![0u8; 32768];
+    let kernel_stack_top = kernel_stack.as_ptr() as u64 + 32768;
+    // SAFETY: Setting per-CPU kernel stack.
+    unsafe {
+        crate::arch::x86_64::percpu::init(kernel_stack_top);
+    }
+
+    crate::serial_println!("Entering user mode at {:#x}...", info.entry_point);
+
+    // SAFETY: Address space is valid, user code loaded, stacks mapped.
+    unsafe {
+        core::arch::asm!(
+            "mov cr3, {cr3}",
+            "push {ss}",
+            "push {rsp}",
+            "push {rflags}",
+            "push {cs}",
+            "push {rip}",
+            "iretq",
+            cr3 = in(reg) addr_space.cr3(),
+            ss = in(reg) crate::arch::x86_64::gdt::USER_DS as u64,
+            rsp = in(reg) crate::process::address_space::USER_STACK_TOP,
+            rflags = in(reg) 0x202u64,
+            cs = in(reg) crate::arch::x86_64::gdt::USER_CS as u64,
+            rip = in(reg) info.entry_point,
+            options(noreturn)
+        );
+    }
+}
+
 pub fn pipe_test() {
     use crate::fs::vfs::Inode;
     use crate::ipc::pipe::Pipe;

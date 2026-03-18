@@ -132,6 +132,7 @@ fn execute(cmd: &str, args: &[String]) {
         "stress" => builtins::stress_test(args),
         "bench" => builtins::bench(args),
         "leakcheck" => builtins::leak_check(),
+        "run-user" => builtins::run_user_program(),
         _ => {
             crate::serial_println!("lsh: {}: command not found", cmd);
         }
