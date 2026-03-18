@@ -20,6 +20,8 @@ mod sync;
 #[allow(dead_code)]
 mod syscall;
 pub mod test_framework;
+#[allow(dead_code)]
+mod tty;
 
 use limine::request::{
     BootloaderInfoRequest, ExecutableAddressRequest, FramebufferRequest, HhdmRequest,
@@ -301,6 +303,20 @@ fn kernel_main() -> ! {
     fs::vfs::Vfs::mount("/dev", fs::devfs::DevFs::new());
     fs::vfs::Vfs::mount("/proc", fs::procfs::ProcFs::new());
     fs::vfs::Vfs::mount("/tmp", fs::tmpfs::TmpFs::new());
+
+    // Initialize TTY subsystem
+    tty::init();
+
+    // Wire up keyboard interrupt (IRQ1 → vector 0x21)
+    // SAFETY: Handler has correct x86-interrupt calling convention.
+    unsafe {
+        arch::x86_64::idt::set_handler(
+            0x21,
+            arch::x86_64::interrupts::keyboard_handler as *const () as u64,
+            0,
+        );
+    }
+    serial_println!("Keyboard: IRQ1 handler installed");
 
     // VFS tests
     vfs_tests();
