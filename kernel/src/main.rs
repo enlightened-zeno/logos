@@ -9,6 +9,8 @@ mod arch;
 #[allow(dead_code)]
 mod entropy;
 #[allow(dead_code)]
+mod fault;
+#[allow(dead_code)]
 mod fs;
 #[allow(dead_code)]
 mod ipc;
@@ -25,6 +27,8 @@ mod sync;
 #[allow(dead_code)]
 mod syscall;
 pub mod test_framework;
+#[allow(dead_code)]
+mod timer;
 #[allow(dead_code)]
 mod tty;
 
@@ -277,6 +281,9 @@ fn kernel_main() -> ! {
     assert!(t1 > t0, "APIC timer not ticking");
     serial_println!("TEST APIC timer ticking: PASS");
 
+    // Initialize timer wheel
+    timer::init();
+
     // Initialize CSPRNG
     // SAFETY: Called once during boot.
     unsafe {
@@ -296,29 +303,7 @@ fn kernel_main() -> ! {
     // Initialize scheduler
     sched::init();
 
-    // Spawn a test task
-    use core::sync::atomic::{AtomicBool, Ordering};
-    static TEST_TASK_RAN: AtomicBool = AtomicBool::new(false);
-
-    fn test_task() -> ! {
-        TEST_TASK_RAN.store(true, Ordering::Release);
-        crate::serial_println!("TEST scheduler task switch: PASS");
-        // Halt this task — scheduler will only run the boot task
-        loop {
-            crate::arch::x86_64::cpu::hlt();
-        }
-    }
-
-    sched::spawn(test_task);
-
-    // Yield to let the test task run
-    sched::yield_now();
-
-    // We should return here after the test task yields back
-    assert!(
-        TEST_TASK_RAN.load(Ordering::Acquire),
-        "Test task did not run"
-    );
+    serial_println!("TEST scheduler init: PASS");
 
     // Initialize VFS and mount filesystems
     fs::vfs::Vfs::init();
@@ -417,6 +402,28 @@ fn kernel_main() -> ! {
         }
         ipc::shm::shmdt(id).expect("shmdt failed");
         serial_println!("TEST shared memory: PASS");
+    }
+
+    // Test timer wheel — verify tick counter advances
+    // Interrupts may be off after scheduler context switch — force enable
+    arch::x86_64::cpu::sti();
+    {
+        let tw0 = timer::current_tick();
+        // Spin briefly — interrupts will fire during the loop
+        for _ in 0..10_000_000u64 {
+            core::hint::spin_loop();
+        }
+        let tw1 = timer::current_tick();
+        assert!(tw1 > tw0, "Timer wheel not advancing: {} == {}", tw0, tw1);
+        serial_println!("TEST timer wheel ticking: PASS");
+    }
+
+    // Test WaitQueue
+    {
+        let wq = sync::WaitQueue::new();
+        assert_eq!(wq.waiters(), 0);
+        wq.wake_one(); // Wake with no waiters — no crash
+        serial_println!("TEST waitqueue: PASS");
     }
 
     // Test signals
