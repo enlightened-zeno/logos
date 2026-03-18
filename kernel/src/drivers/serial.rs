@@ -91,6 +91,11 @@ pub fn init() {
     SERIAL1.lock().init();
 }
 
+/// Write a single byte to the serial port.
+pub fn write_byte(byte: u8) {
+    SERIAL1.lock().write_byte(byte);
+}
+
 /// Print formatted text to the serial port.
 #[macro_export]
 macro_rules! serial_print {

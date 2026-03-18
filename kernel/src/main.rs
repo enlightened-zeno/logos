@@ -15,6 +15,8 @@ mod process;
 pub mod sched;
 #[allow(dead_code)]
 mod sync;
+#[allow(dead_code)]
+mod syscall;
 pub mod test_framework;
 
 use limine::request::{
@@ -257,6 +259,12 @@ fn kernel_main() -> ! {
     serial_println!("Entropy: random sample = {:#x}", r);
     assert!(r != 0, "CSPRNG returned zero");
     serial_println!("TEST entropy: PASS");
+
+    // Initialize SYSCALL/SYSRET
+    // SAFETY: Called once after GDT is loaded.
+    unsafe {
+        arch::x86_64::syscall::init();
+    }
 
     // Initialize scheduler
     sched::init();
