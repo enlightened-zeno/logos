@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 limine = "0.5"
-spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex"] }
+spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex", "once"] }
 bitflags = "2.4"
 log = "0.4"
 
