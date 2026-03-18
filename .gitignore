@@ -1,0 +1,7 @@
+target/
+build/
+*.img
+*.sock
+*.log
+*.pyc
+__pycache__/

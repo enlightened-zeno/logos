@@ -1,0 +1,17 @@
+[package]
+name = "logos-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+limine = "0.5"
+spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex"] }
+bitflags = "2.4"
+log = "0.4"
+
+[features]
+default = []
+fault_injection = []
+leak_detection = []
+invariants = []
+test_full = ["fault_injection", "leak_detection", "invariants"]
