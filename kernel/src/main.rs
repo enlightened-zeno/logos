@@ -1916,6 +1916,144 @@ fn data_integrity_tests() {
         serial_println!("TEST path edge cases: PASS");
     }
 
+    // Batch: VFS stat tests
+    {
+        use fs::vfs::Vfs;
+        let null_stat = Vfs::resolve("/dev/null")
+            .expect("null")
+            .stat()
+            .expect("stat");
+        assert_eq!(null_stat.inode_type, fs::vfs::InodeType::CharDevice);
+        let zero_stat = Vfs::resolve("/dev/zero")
+            .expect("zero")
+            .stat()
+            .expect("stat");
+        assert_eq!(zero_stat.inode_type, fs::vfs::InodeType::CharDevice);
+        let tmp_stat = Vfs::resolve("/tmp").expect("tmp").stat().expect("stat");
+        assert_eq!(tmp_stat.inode_type, fs::vfs::InodeType::Directory);
+        let proc_stat = Vfs::resolve("/proc").expect("proc").stat().expect("stat");
+        assert_eq!(proc_stat.inode_type, fs::vfs::InodeType::Directory);
+        serial_println!("TEST VFS stat types (4 checks): PASS");
+    }
+
+    // Batch: tmpfs directory operations
+    {
+        use fs::vfs::{InodeType, Vfs};
+        let root = Vfs::resolve("/tmp").expect("/tmp");
+        // Create dir, create file inside, readdir, unlink, rmdir
+        let dir = root
+            .create("batch_dir", InodeType::Directory, 0o755)
+            .expect("mkdir");
+        dir.create("a.txt", InodeType::File, 0o644)
+            .expect("create a");
+        dir.create("b.txt", InodeType::File, 0o644)
+            .expect("create b");
+        let entries = dir.readdir().expect("readdir");
+        assert!(entries.len() >= 4, "Should have ., .., a.txt, b.txt"); // . and .. plus 2 files
+        dir.unlink("a.txt").expect("rm a");
+        dir.unlink("b.txt").expect("rm b");
+        root.unlink("batch_dir").expect("rmdir");
+        serial_println!("TEST tmpfs dir ops (mkdir/create/readdir/rm): PASS");
+    }
+
+    // Batch: pipe edge cases
+    {
+        use fs::vfs::Inode;
+        // Empty read from pipe with live writer
+        let (r, w) = ipc::pipe::Pipe::create();
+        // Writer alive but no data — would block. Just verify setup works.
+        w.write(0, b"x").expect("write 1 byte");
+        let mut buf = [0u8; 1];
+        r.read(0, &mut buf).expect("read 1 byte");
+        assert_eq!(buf[0], b'x');
+        // Large write
+        let big = [0x42u8; 8192];
+        let written = w.write(0, &big).expect("large write");
+        assert!(written > 0);
+        let mut readback = alloc::vec![0u8; written];
+        let read = r.read(0, &mut readback).expect("large read");
+        assert_eq!(read, written);
+        assert!(readback.iter().all(|&b| b == 0x42));
+        serial_println!("TEST pipe edge cases (1-byte, 8K): PASS");
+    }
+
+    // Batch: multiple signal operations
+    {
+        use process::signal::{Signal, SignalState};
+        let mut s = SignalState::new();
+        // Send multiple, verify order (lowest bit first)
+        s.send(Signal::SIGTERM); // bit 15
+        s.send(Signal::SIGHUP); // bit 1
+        s.send(Signal::SIGINT); // bit 2
+        let first = s.dequeue().expect("first");
+        assert_eq!(first, Signal::SIGHUP, "Lowest signal first");
+        let second = s.dequeue().expect("second");
+        assert_eq!(second, Signal::SIGINT);
+        let third = s.dequeue().expect("third");
+        assert_eq!(third, Signal::SIGTERM);
+        assert!(s.dequeue().is_none());
+        serial_println!("TEST signal priority ordering: PASS");
+    }
+
+    // Batch: process table stress
+    {
+        use process::pid;
+        let before = pid::count();
+        let mut pids = alloc::vec::Vec::new();
+        for _ in 0..10 {
+            let p = pid::alloc_pid();
+            pid::register(pid::ProcessDesc {
+                pid: p,
+                ppid: 1,
+                pgid: 1,
+                sid: 1,
+                state: pid::ProcessState::Running,
+                exit_code: 0,
+                uid: 0,
+                gid: 0,
+            });
+            pids.push(p);
+        }
+        // Reparent half to a different parent
+        let parent = pids[0];
+        for &child in &pids[1..5] {
+            // Simulate reparenting by just verifying the API
+            pid::set_zombie(child, 0);
+        }
+        // Reap zombies
+        for &child in &pids[1..5] {
+            pid::reap(child);
+        }
+        // Remaining should still be alive
+        assert_eq!(pid::count(), before + 6); // 10 added - 4 reaped = 6 remain
+        for &p in &pids[5..] {
+            pid::set_zombie(p, 0);
+            pid::reap(p);
+        }
+        pid::set_zombie(parent, 0);
+        pid::reap(parent);
+        assert_eq!(pid::count(), before);
+        serial_println!("TEST process table stress (10 PIDs): PASS");
+    }
+
+    // Batch: memory allocator patterns
+    {
+        // Allocate different sizes
+        let b1 = alloc::boxed::Box::new([0u8; 16]);
+        let b2 = alloc::boxed::Box::new([0u8; 128]);
+        let b3 = alloc::boxed::Box::new([0u8; 1024]);
+        let b4 = alloc::boxed::Box::new([0u8; 4096]);
+        drop(b4);
+        drop(b2);
+        drop(b1);
+        drop(b3);
+        // String allocation
+        let s = alloc::string::String::from("test string for allocator");
+        assert_eq!(s.len(), 25);
+        drop(s);
+        serial_println!("TEST allocator mixed sizes: PASS");
+    }
+
     serial_println!("All data integrity tests passed.");
 }
 
