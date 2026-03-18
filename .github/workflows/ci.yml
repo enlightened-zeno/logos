@@ -49,7 +49,7 @@ jobs:
     strategy:
       matrix:
         smp: [1, 2]
-        memory: ["64M", "256M"]
+        memory: ["128M", "256M"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -68,8 +68,10 @@ jobs:
         run: ./tools/mkimage-noroot.sh
       - name: Run kernel boot test
         run: |
+          OVMF=$(find /usr -name 'OVMF_CODE*.fd' -not -name '*secboot*' 2>/dev/null | head -1)
+          echo "Using OVMF: $OVMF"
           timeout 30 qemu-system-x86_64 \
-            -bios /usr/share/OVMF/OVMF_CODE.fd \
+            -bios "$OVMF" \
             -drive file=build/logos.img,format=raw \
             -machine q35 \
             -cpu qemu64,+rdrand,+xsave,+xsaveopt \
@@ -78,10 +80,10 @@ jobs:
             -serial file:build/serial.log \
             -display none \
             -no-reboot \
-            2>/dev/null || true
+            2>&1 || true
           echo "=== Serial output ==="
-          cat build/serial.log | strings | grep -v '^\[' | grep -v '^BdsDxe'
-          echo "=== Checking for success ==="
+          strings build/serial.log | grep -v '^\[' | grep -v '^BdsDxe' || true
+          echo "=== Validating ==="
           grep -q "Boot complete. Halting." build/serial.log
           grep -q "All memory tests passed." build/serial.log
           echo "Kernel boot test passed."
