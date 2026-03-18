@@ -547,6 +547,9 @@ fn kernel_main() -> ! {
     // Additional subsystem tests
     extended_tests();
 
+    // Data integrity tests
+    data_integrity_tests();
+
     // Run memory integration tests
     memory_tests();
 
@@ -1071,6 +1074,122 @@ fn vfs_tests() {
     serial_println!("TEST /proc/meminfo: PASS");
 
     serial_println!("All VFS tests passed.");
+}
+
+fn data_integrity_tests() {
+    extern crate alloc;
+    use fs::vfs::{InodeType, Vfs};
+
+    // DATA-01: Write sequential pattern to file, read back
+    {
+        let root = Vfs::resolve("/tmp").expect("/tmp");
+        let file = root
+            .create("data_test_01", InodeType::File, 0o644)
+            .expect("create");
+        let mut pattern = [0u8; 256];
+        for (i, byte) in pattern.iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        file.write(0, &pattern).expect("write pattern");
+
+        let mut readback = [0u8; 256];
+        let n = file.read(0, &mut readback).expect("read pattern");
+        assert_eq!(n, 256);
+        assert_eq!(readback, pattern, "Pattern mismatch");
+        root.unlink("data_test_01").expect("unlink");
+        serial_println!("TEST DATA-01 sequential pattern: PASS");
+    }
+
+    // DATA-04: Write pattern via pipe
+    {
+        use fs::vfs::Inode;
+        let (reader, writer) = ipc::pipe::Pipe::create();
+        let pattern: [u8; 128] = core::array::from_fn(|i| (i * 3 + 7) as u8);
+        writer.write(0, &pattern).expect("pipe write");
+        let mut readback = [0u8; 128];
+        reader.read(0, &mut readback).expect("pipe read");
+        assert_eq!(readback, pattern, "Pipe data corrupted");
+        serial_println!("TEST DATA-04 pipe integrity: PASS");
+    }
+
+    // DATA-06: Write unique patterns to multiple files
+    {
+        let root = Vfs::resolve("/tmp").expect("/tmp");
+        for i in 0u8..10 {
+            let name = alloc::format!("data_multi_{}", i);
+            let file = root.create(&name, InodeType::File, 0o644).expect("create");
+            let data = [i; 64]; // 64 bytes of value i
+            file.write(0, &data).expect("write");
+        }
+
+        // Read all back and verify no cross-contamination
+        for i in 0u8..10 {
+            let name = alloc::format!("data_multi_{}", i);
+            let file = root.lookup(&name).expect("lookup");
+            let mut buf = [0u8; 64];
+            file.read(0, &mut buf).expect("read");
+            assert!(buf.iter().all(|&b| b == i), "File {} contaminated", i);
+            root.unlink(&name).expect("unlink");
+        }
+        serial_println!("TEST DATA-06 multi-file isolation: PASS");
+    }
+
+    // DATA-07: Write, truncate, verify
+    {
+        let root = Vfs::resolve("/tmp").expect("/tmp");
+        let file = root
+            .create("data_trunc", InodeType::File, 0o644)
+            .expect("create");
+        file.write(0, &[0xAB; 1024]).expect("write 1K");
+        file.truncate(512).expect("truncate");
+        let st = file.stat().expect("stat");
+        assert_eq!(st.size, 512, "Size after truncate");
+        let mut buf = [0u8; 512];
+        let n = file.read(0, &mut buf).expect("read");
+        assert_eq!(n, 512);
+        assert!(
+            buf.iter().all(|&b| b == 0xAB),
+            "Data corrupted after truncate"
+        );
+        root.unlink("data_trunc").expect("unlink");
+        serial_println!("TEST DATA-07 truncate integrity: PASS");
+    }
+
+    // ARCH-C01: GDT loaded correctly (verify via inline asm)
+    {
+        // SAFETY: SGDT reads the GDTR, always safe.
+        let (limit, base) = unsafe {
+            let mut gdtr = [0u8; 10];
+            core::arch::asm!("sgdt [{}]", in(reg) gdtr.as_mut_ptr(), options(nostack));
+            let l = u16::from_le_bytes([gdtr[0], gdtr[1]]);
+            let b = u64::from_le_bytes([
+                gdtr[2], gdtr[3], gdtr[4], gdtr[5], gdtr[6], gdtr[7], gdtr[8], gdtr[9],
+            ]);
+            (l, b)
+        };
+        assert!(limit > 0, "GDT limit is 0");
+        assert!(base > 0, "GDT base is 0");
+        serial_println!(
+            "TEST ARCH-C01 GDT loaded (limit={}, base={:#x}): PASS",
+            limit,
+            base
+        );
+    }
+
+    // ARCH-C02: IDT loaded correctly
+    {
+        // SAFETY: SIDT reads the IDTR, always safe.
+        let limit = unsafe {
+            let mut idtr = [0u8; 10];
+            core::arch::asm!("sidt [{}]", in(reg) idtr.as_mut_ptr(), options(nostack));
+            u16::from_le_bytes([idtr[0], idtr[1]])
+        };
+        assert!(limit > 0, "IDT limit is 0");
+        assert_eq!(limit, 256 * 16 - 1, "IDT should have 256 entries");
+        serial_println!("TEST ARCH-C02 IDT loaded (limit={}): PASS", limit);
+    }
+
+    serial_println!("All data integrity tests passed.");
 }
 
 fn memory_tests() {
