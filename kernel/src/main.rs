@@ -2054,6 +2054,40 @@ fn data_integrity_tests() {
         serial_println!("TEST allocator mixed sizes: PASS");
     }
 
+    // Batch: SHM key lookup
+    {
+        let id1 = ipc::shm::shmget(200, 1024).expect("shmget 200");
+        let id2 = ipc::shm::shmget(200, 1024).expect("shmget same key");
+        assert_eq!(id1, id2, "Same key returns same segment");
+        let id3 = ipc::shm::shmget(201, 512).expect("shmget 201");
+        assert_ne!(id1, id3, "Different keys differ");
+        serial_println!("TEST SHM key lookup: PASS");
+    }
+
+    // Batch: Errno values
+    {
+        use syscall::errno::Errno;
+        assert_eq!(Errno::ENOENT.as_neg(), -2);
+        assert_eq!(Errno::ENOMEM.as_neg(), -12);
+        assert_eq!(Errno::ENOSYS.as_neg(), -38);
+        assert_eq!(Errno::EBADF.as_neg(), -9);
+        serial_println!("TEST errno values: PASS");
+    }
+
+    // Batch: VFS mount listing
+    {
+        let mounts = fs::vfs::Vfs::mounts();
+        assert!(mounts.len() >= 4);
+        serial_println!("TEST VFS mount listing ({}): PASS", mounts.len());
+    }
+
+    // Batch: PMM accounting
+    {
+        let pmm = memory::pmm::Pmm::get();
+        assert_eq!(pmm.total_frames(), pmm.free_frames() + pmm.used_frames());
+        serial_println!("TEST PMM accounting: PASS");
+    }
+
     serial_println!("All data integrity tests passed.");
 }
 
