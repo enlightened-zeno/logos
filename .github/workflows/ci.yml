@@ -49,7 +49,7 @@ jobs:
     strategy:
       matrix:
         smp: [1, 2]
-        memory: ["128M", "256M"]
+        memory: ["256M", "512M"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
