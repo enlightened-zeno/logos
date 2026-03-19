@@ -103,3 +103,15 @@ mod io_tests;
 mod integration_tests;
 #[cfg(test)]
 mod invariant_tests;
+#[cfg(test)]
+mod pmm_spec_tests;
+#[cfg(test)]
+mod vmm_spec_tests;
+#[cfg(test)]
+mod syscall_spec_tests;
+#[cfg(test)]
+mod sched_spec_tests;
+#[cfg(test)]
+mod fs_spec_tests;
+#[cfg(test)]
+mod ipc_spec_tests;
