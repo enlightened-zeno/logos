@@ -20,10 +20,15 @@ fn test_timer_level_selection() {
     let wheel_size: [usize; 4] = [256, 64, 64, 64];
 
     let select_level = |delta: u64| -> usize {
-        if delta < wheel_size[0] as u64 { 0 }
-        else if delta < (wheel_size[0] * wheel_size[1]) as u64 { 1 }
-        else if delta < (wheel_size[0] * wheel_size[1] * wheel_size[2]) as u64 { 2 }
-        else { 3 }
+        if delta < wheel_size[0] as u64 {
+            0
+        } else if delta < (wheel_size[0] * wheel_size[1]) as u64 {
+            1
+        } else if delta < (wheel_size[0] * wheel_size[1] * wheel_size[2]) as u64 {
+            2
+        } else {
+            3
+        }
     };
 
     assert_eq!(select_level(1), 0);

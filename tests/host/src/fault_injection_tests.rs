@@ -1,5 +1,4 @@
 /// Fault injection framework tests.
-
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[test]
@@ -44,7 +43,9 @@ fn test_feature_gated() {
 }
 
 fn should_fail_sim(n: u32, counter: &AtomicU32) -> bool {
-    if n == 0 { return false; }
+    if n == 0 {
+        return false;
+    }
     let count = counter.fetch_add(1, Ordering::Relaxed);
     count % n == 0
 }

@@ -1,10 +1,18 @@
 /// ChaCha20 quarter-round and keystream tests.
 
 fn quarter_round(s: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
-    s[a] = s[a].wrapping_add(s[b]); s[d] ^= s[a]; s[d] = s[d].rotate_left(16);
-    s[c] = s[c].wrapping_add(s[d]); s[b] ^= s[c]; s[b] = s[b].rotate_left(12);
-    s[a] = s[a].wrapping_add(s[b]); s[d] ^= s[a]; s[d] = s[d].rotate_left(8);
-    s[c] = s[c].wrapping_add(s[d]); s[b] ^= s[c]; s[b] = s[b].rotate_left(7);
+    s[a] = s[a].wrapping_add(s[b]);
+    s[d] ^= s[a];
+    s[d] = s[d].rotate_left(16);
+    s[c] = s[c].wrapping_add(s[d]);
+    s[b] ^= s[c];
+    s[b] = s[b].rotate_left(12);
+    s[a] = s[a].wrapping_add(s[b]);
+    s[d] ^= s[a];
+    s[d] = s[d].rotate_left(8);
+    s[c] = s[c].wrapping_add(s[d]);
+    s[b] ^= s[c];
+    s[b] = s[b].rotate_left(7);
 }
 
 #[test]

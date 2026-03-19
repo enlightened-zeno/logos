@@ -36,10 +36,10 @@ fn test_user_ptr_crosses_kernel() {
 #[test]
 fn test_syscall_numbers() {
     // Linux-compatible syscall numbers
-    assert_eq!(0u64, 0);   // SYS_READ
-    assert_eq!(1u64, 1);   // SYS_WRITE
-    assert_eq!(2u64, 2);   // SYS_OPEN
-    assert_eq!(3u64, 3);   // SYS_CLOSE
+    assert_eq!(0u64, 0); // SYS_READ
+    assert_eq!(1u64, 1); // SYS_WRITE
+    assert_eq!(2u64, 2); // SYS_OPEN
+    assert_eq!(3u64, 3); // SYS_CLOSE
     assert_eq!(12u64, 12); // SYS_BRK
     assert_eq!(39u64, 39); // SYS_GETPID
     assert_eq!(57u64, 57); // SYS_FORK

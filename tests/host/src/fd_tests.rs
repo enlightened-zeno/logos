@@ -47,7 +47,9 @@ fn test_fd_max() {
     let mut count = 0;
     let fds = vec![true; max_fds]; // All allocated
     for slot in &fds {
-        if *slot { count += 1; }
+        if *slot {
+            count += 1;
+        }
     }
     assert_eq!(count, max_fds);
     // Next alloc should fail (no free slot)

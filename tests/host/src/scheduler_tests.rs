@@ -7,7 +7,7 @@ fn test_mlfq_quanta() {
     assert_eq!(quanta[3], 80);
     // Each level doubles
     for i in 1..quanta.len() {
-        assert_eq!(quanta[i], quanta[i-1] * 2);
+        assert_eq!(quanta[i], quanta[i - 1] * 2);
     }
 }
 
@@ -17,17 +17,25 @@ fn test_priority_demotion() {
     let max_level = 3u8;
 
     // After quantum exhaustion, demote
-    if priority < max_level { priority += 1; }
+    if priority < max_level {
+        priority += 1;
+    }
     assert_eq!(priority, 1);
 
-    if priority < max_level { priority += 1; }
+    if priority < max_level {
+        priority += 1;
+    }
     assert_eq!(priority, 2);
 
-    if priority < max_level { priority += 1; }
+    if priority < max_level {
+        priority += 1;
+    }
     assert_eq!(priority, 3);
 
     // Can't demote past max
-    if priority < max_level { priority += 1; }
+    if priority < max_level {
+        priority += 1;
+    }
     assert_eq!(priority, 3);
 }
 

@@ -3,8 +3,16 @@
 #[test]
 fn test_pid_allocation() {
     let mut next_pid = 2u64; // PIDs start at 2 (1 = init)
-    let p1 = { let p = next_pid; next_pid += 1; p };
-    let p2 = { let p = next_pid; next_pid += 1; p };
+    let p1 = {
+        let p = next_pid;
+        next_pid += 1;
+        p
+    };
+    let p2 = {
+        let p = next_pid;
+        next_pid += 1;
+        p
+    };
     assert_eq!(p1, 2);
     assert_eq!(p2, 3);
     assert_ne!(p1, p2);
@@ -13,7 +21,10 @@ fn test_pid_allocation() {
 #[test]
 fn test_zombie_reap() {
     #[derive(Clone, Copy, PartialEq, Debug)]
-    enum State { Running, Zombie }
+    enum State {
+        Running,
+        Zombie,
+    }
 
     let mut state = State::Running;
     let mut exit_code = 0i32;

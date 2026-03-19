@@ -1,14 +1,19 @@
 /// Synchronization primitive logic tests.
-
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 #[test]
 fn test_spinlock_acquire_release() {
     let locked = AtomicBool::new(false);
-    assert!(locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok());
-    assert!(locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err());
+    assert!(locked
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok());
+    assert!(locked
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err());
     locked.store(false, Ordering::Release);
-    assert!(locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok());
+    assert!(locked
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok());
 }
 
 #[test]
@@ -29,11 +34,13 @@ fn test_rwlock_multiple_readers() {
 fn test_rwlock_writer_exclusive() {
     let state = AtomicI64::new(0);
     // Writer acquires (sets to -1)
-    assert!(state.compare_exchange(0, -1, Ordering::Acquire, Ordering::Relaxed).is_ok());
+    assert!(state
+        .compare_exchange(0, -1, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok());
     // Reader can't acquire while writer holds
     let current = state.load(Ordering::Acquire);
     assert!(current < 0); // Writer holds
-    // Writer releases
+                          // Writer releases
     state.store(0, Ordering::Release);
 }
 
@@ -59,6 +66,8 @@ fn test_irq_save_restore() {
     irq_was_enabled = false;
     assert!(!irq_was_enabled);
     // sti (restore)
-    if saved { irq_was_enabled = true; }
+    if saved {
+        irq_was_enabled = true;
+    }
     assert!(irq_was_enabled);
 }

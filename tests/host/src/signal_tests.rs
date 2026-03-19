@@ -3,10 +3,10 @@
 #[test]
 fn test_signal_numbers() {
     // POSIX signal numbers
-    assert_eq!(1u8, 1);   // SIGHUP
-    assert_eq!(2u8, 2);   // SIGINT
-    assert_eq!(3u8, 3);   // SIGQUIT
-    assert_eq!(9u8, 9);   // SIGKILL
+    assert_eq!(1u8, 1); // SIGHUP
+    assert_eq!(2u8, 2); // SIGINT
+    assert_eq!(3u8, 3); // SIGQUIT
+    assert_eq!(9u8, 9); // SIGKILL
     assert_eq!(15u8, 15); // SIGTERM
     assert_eq!(17u8, 17); // SIGCHLD
     assert_eq!(19u8, 19); // SIGSTOP
@@ -60,8 +60,8 @@ fn test_signal_priority() {
     // Lower signal numbers have higher priority (dequeued first)
     let mut pending: u64 = 0;
     pending |= 1 << 15; // SIGTERM
-    pending |= 1 << 2;  // SIGINT
-    pending |= 1 << 1;  // SIGHUP
+    pending |= 1 << 2; // SIGINT
+    pending |= 1 << 1; // SIGHUP
 
     let first = pending.trailing_zeros();
     assert_eq!(first, 1); // SIGHUP has lowest number

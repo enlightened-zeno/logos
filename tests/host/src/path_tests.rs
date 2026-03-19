@@ -17,7 +17,11 @@ fn normalize(path: &str) -> String {
             other => parts.push(other),
         }
     }
-    let mut result = if absolute { String::from("/") } else { String::new() };
+    let mut result = if absolute {
+        String::from("/")
+    } else {
+        String::new()
+    };
     for (i, part) in parts.iter().enumerate() {
         if (i > 0 || absolute) && !(absolute && i == 0) {
             result.push('/');
@@ -25,7 +29,11 @@ fn normalize(path: &str) -> String {
         result.push_str(part);
     }
     if result.is_empty() {
-        return if absolute { String::from("/") } else { String::from(".") };
+        return if absolute {
+            String::from("/")
+        } else {
+            String::from(".")
+        };
     }
     result
 }

@@ -22,9 +22,13 @@ fn test_perf_targets() {
 #[test]
 fn test_regression_threshold() {
     let baseline = 100u64; // ns
-    let current = 115u64;  // ns
+    let current = 115u64; // ns
     let regression_pct = ((current as f64 - baseline as f64) / baseline as f64 * 100.0) as u64;
-    assert!(regression_pct < 20, "Regression {}% exceeds 20% threshold", regression_pct);
+    assert!(
+        regression_pct < 20,
+        "Regression {}% exceeds 20% threshold",
+        regression_pct
+    );
 }
 
 #[test]
@@ -42,6 +46,6 @@ fn test_pipe_throughput_target() {
 #[test]
 fn test_file_create_target() {
     let tmpfs_us = 100; // < 100 µs
-    let ext2_us = 500;  // < 500 µs
+    let ext2_us = 500; // < 500 µs
     assert!(tmpfs_us < ext2_us);
 }

@@ -29,10 +29,14 @@ run: image                   ## Boot in QEMU (interactive)
 		-serial stdio \
 		-no-reboot
 
-test: test-kernel test-system ## Run all tests
+test: test-host test-kernel   ## Run all tests
 
 test-host:                   ## Run host-side unit tests
-	cd tests/host && rustup run stable cargo test
+	@rm -rf /tmp/logos-host-tests-run
+	@cp -r tests/host /tmp/logos-host-tests-run
+	@rm -rf /tmp/logos-host-tests-run/.cargo
+	@cd /tmp/logos-host-tests-run && rustup run stable cargo test
+	@rm -rf /tmp/logos-host-tests-run
 
 test-kernel: image           ## Run in-kernel boot tests (QEMU)
 	@echo "=== Kernel Boot Tests ==="

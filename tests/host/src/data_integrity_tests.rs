@@ -33,8 +33,11 @@ fn test_cross_contamination() {
 
     // Verify no cross-contamination
     for (i, file) in files.iter().enumerate() {
-        assert!(file.iter().all(|&b| b == i as u8),
-            "File {} contaminated", i);
+        assert!(
+            file.iter().all(|&b| b == i as u8),
+            "File {} contaminated",
+            i
+        );
     }
 }
 

@@ -42,7 +42,7 @@ fn test_mounts_format() {
     let parts: Vec<&str> = entry.split_whitespace().collect();
     assert_eq!(parts.len(), 6);
     assert_eq!(parts[0], "tmpfs"); // device
-    assert_eq!(parts[1], "/");     // mountpoint
+    assert_eq!(parts[1], "/"); // mountpoint
 }
 
 #[test]

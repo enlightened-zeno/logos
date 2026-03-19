@@ -1,6 +1,6 @@
-# Override parent .cargo/config.toml to disable build-std for host tests
 [build]
 target = "x86_64-unknown-linux-gnu"
 
-# Empty unstable section — but cargo still inherits parent's build-std.
-# Workaround: use rustc directly or set CARGO_ENCODED_RUSTFLAGS.
+[unstable]
+build-std = []
+build-std-features = []

@@ -12,9 +12,7 @@ fn test_page_alignment() {
 
 #[test]
 fn test_align_up() {
-    let align = |addr: u64, alignment: u64| -> u64 {
-        (addr + alignment - 1) & !(alignment - 1)
-    };
+    let align = |addr: u64, alignment: u64| -> u64 { (addr + alignment - 1) & !(alignment - 1) };
     assert_eq!(align(0, 4096), 0);
     assert_eq!(align(1, 4096), 4096);
     assert_eq!(align(4095, 4096), 4096);
@@ -33,9 +31,7 @@ fn test_frame_number() {
 #[test]
 fn test_canonical_address() {
     // Canonical: bits 48-63 must match bit 47
-    let canonicalize = |addr: u64| -> u64 {
-        ((addr as i64) << 16 >> 16) as u64
-    };
+    let canonicalize = |addr: u64| -> u64 { ((addr as i64) << 16 >> 16) as u64 };
 
     // User space (bit 47 = 0)
     assert_eq!(canonicalize(0x0000_7FFF_FFFF_F000), 0x0000_7FFF_FFFF_F000);
@@ -77,9 +73,13 @@ fn test_zone_classification() {
     // DMA32: 16 MiB..4 GiB
     // Normal: 4 GiB+
     let classify = |addr: u64| -> &'static str {
-        if addr < 0x100_0000 { "dma16" }
-        else if addr < 0x1_0000_0000 { "dma32" }
-        else { "normal" }
+        if addr < 0x100_0000 {
+            "dma16"
+        } else if addr < 0x1_0000_0000 {
+            "dma32"
+        } else {
+            "normal"
+        }
     };
 
     assert_eq!(classify(0), "dma16");
@@ -95,19 +95,27 @@ fn test_slab_size_classes() {
 
     // Each class should be a power of 2 or at least double previous
     for i in 1..classes.len() {
-        assert!(classes[i] >= classes[i-1] * 2,
+        assert!(
+            classes[i] >= classes[i - 1] * 2,
             "Class {} ({}) should be >= 2x class {} ({})",
-            i, classes[i], i-1, classes[i-1]);
+            i,
+            classes[i],
+            i - 1,
+            classes[i - 1]
+        );
     }
 
     // Find the right class for a given size
     let find_class = |size: usize| -> usize {
-        classes.iter().position(|&s| size <= s).unwrap_or(classes.len())
+        classes
+            .iter()
+            .position(|&s| size <= s)
+            .unwrap_or(classes.len())
     };
 
-    assert_eq!(find_class(1), 0);   // -> 32
-    assert_eq!(find_class(32), 0);  // -> 32
-    assert_eq!(find_class(33), 1);  // -> 64
+    assert_eq!(find_class(1), 0); // -> 32
+    assert_eq!(find_class(32), 0); // -> 32
+    assert_eq!(find_class(33), 1); // -> 64
     assert_eq!(find_class(4096), 7); // -> 4096
     assert_eq!(find_class(4097), 8); // -> fallback to heap
 }

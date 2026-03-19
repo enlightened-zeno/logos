@@ -85,8 +85,14 @@ fn test_free_format() {
 
 #[test]
 fn test_stat_inode_type_display() {
-    let types = vec![('d', "Directory"), ('-', "File"), ('c', "CharDevice"),
-                     ('b', "BlockDevice"), ('l', "Symlink"), ('p', "Pipe")];
+    let types = vec![
+        ('d', "Directory"),
+        ('-', "File"),
+        ('c', "CharDevice"),
+        ('b', "BlockDevice"),
+        ('l', "Symlink"),
+        ('p', "Pipe"),
+    ];
     assert_eq!(types.len(), 6);
 }
 

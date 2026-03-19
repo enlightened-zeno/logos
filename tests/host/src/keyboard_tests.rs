@@ -2,11 +2,20 @@
 
 fn scancode_to_char(code: u8, shift: bool) -> Option<char> {
     let base = match code {
-        0x02 => Some(('1', '!')), 0x03 => Some(('2', '@')), 0x04 => Some(('3', '#')),
-        0x10 => Some(('q', 'Q')), 0x11 => Some(('w', 'W')), 0x12 => Some(('e', 'E')),
-        0x1E => Some(('a', 'A')), 0x1F => Some(('s', 'S')), 0x20 => Some(('d', 'D')),
-        0x2C => Some(('z', 'Z')), 0x2D => Some(('x', 'X')), 0x1C => Some(('\n', '\n')),
-        0x39 => Some((' ', ' ')), 0x0E => Some(('\x08', '\x08')),
+        0x02 => Some(('1', '!')),
+        0x03 => Some(('2', '@')),
+        0x04 => Some(('3', '#')),
+        0x10 => Some(('q', 'Q')),
+        0x11 => Some(('w', 'W')),
+        0x12 => Some(('e', 'E')),
+        0x1E => Some(('a', 'A')),
+        0x1F => Some(('s', 'S')),
+        0x20 => Some(('d', 'D')),
+        0x2C => Some(('z', 'Z')),
+        0x2D => Some(('x', 'X')),
+        0x1C => Some(('\n', '\n')),
+        0x39 => Some((' ', ' ')),
+        0x0E => Some(('\x08', '\x08')),
         _ => None,
     };
     base.map(|(l, u)| if shift { u } else { l })

@@ -1,5 +1,4 @@
 /// Block cache logic tests.
-
 use std::collections::BTreeMap;
 
 #[test]
@@ -68,5 +67,8 @@ fn test_cache_hit_rate() {
     }
 
     let hit_rate = hits as f64 / total as f64;
-    assert!(hit_rate > 0.8, "Hit rate should be > 80% for repeated access");
+    assert!(
+        hit_rate > 0.8,
+        "Hit rate should be > 80% for repeated access"
+    );
 }

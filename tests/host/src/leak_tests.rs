@@ -19,8 +19,8 @@ fn test_snapshot_with_leak() {
 fn test_slab_object_count() {
     let mut allocated = vec![0u64; 8]; // 8 size classes
     allocated[0] = 10; // 32-byte class
-    allocated[1] = 5;  // 64-byte class
-    // After workload, should return to same counts
+    allocated[1] = 5; // 64-byte class
+                      // After workload, should return to same counts
     allocated[0] = 10;
     allocated[1] = 5;
     assert_eq!(allocated[0], 10);

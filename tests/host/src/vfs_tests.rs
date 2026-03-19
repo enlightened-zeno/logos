@@ -24,11 +24,15 @@ fn test_mount_longest_prefix() {
             }
         }
         // Root always matches
-        if best.is_empty() { "tmpfs" } else { best }
+        if best.is_empty() {
+            "tmpfs"
+        } else {
+            best
+        }
     };
 
     assert_eq!(find_mount("/"), "tmpfs");
-    assert_eq!(find_mount("/tmp"), "tmpfs");  // Falls to /
+    assert_eq!(find_mount("/tmp"), "tmpfs"); // Falls to /
     assert_eq!(find_mount("/dev"), "devfs");
     assert_eq!(find_mount("/dev/null"), "devfs");
     assert_eq!(find_mount("/dev/pts/0"), "devpts");
@@ -46,7 +50,14 @@ fn test_path_components() {
 #[test]
 fn test_inode_types() {
     #[derive(PartialEq, Debug)]
-    enum InodeType { File, Directory, CharDevice, BlockDevice, Symlink, Pipe }
+    enum InodeType {
+        File,
+        Directory,
+        CharDevice,
+        BlockDevice,
+        Symlink,
+        Pipe,
+    }
 
     let types = vec![
         InodeType::File,

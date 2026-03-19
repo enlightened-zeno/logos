@@ -51,7 +51,7 @@ fn test_tmpfs_permissions() {
     let dir_mode = 0o755u32;
     assert!(file_mode & 0o400 != 0); // owner read
     assert!(file_mode & 0o200 != 0); // owner write
-    assert!(dir_mode & 0o100 != 0);  // owner execute (for dirs)
+    assert!(dir_mode & 0o100 != 0); // owner execute (for dirs)
 }
 
 #[test]

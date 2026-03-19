@@ -45,8 +45,12 @@ fn test_ctrl_w_kills_word() {
     let mut buf: Vec<u8> = input.bytes().collect();
 
     // Ctrl+W: delete trailing spaces then non-spaces
-    while buf.last() == Some(&b' ') { buf.pop(); }
-    while !buf.is_empty() && buf.last() != Some(&b' ') { buf.pop(); }
+    while buf.last() == Some(&b' ') {
+        buf.pop();
+    }
+    while !buf.is_empty() && buf.last() != Some(&b' ') {
+        buf.pop();
+    }
 
     assert_eq!(std::str::from_utf8(&buf).unwrap(), "hello ");
 }

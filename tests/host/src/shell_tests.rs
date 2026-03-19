@@ -8,18 +8,34 @@ fn parse_line(line: &str) -> Vec<String> {
     let mut escape = false;
 
     for ch in line.chars() {
-        if escape { current.push(ch); escape = false; continue; }
+        if escape {
+            current.push(ch);
+            escape = false;
+            continue;
+        }
         match ch {
-            '\\' if !in_single => { escape = true; }
-            '\'' if !in_double => { in_single = !in_single; }
-            '"' if !in_single => { in_double = !in_double; }
-            ' ' | '\t' if !in_single && !in_double => {
-                if !current.is_empty() { parts.push(std::mem::take(&mut current)); }
+            '\\' if !in_single => {
+                escape = true;
             }
-            _ => { current.push(ch); }
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            ' ' | '\t' if !in_single && !in_double => {
+                if !current.is_empty() {
+                    parts.push(std::mem::take(&mut current));
+                }
+            }
+            _ => {
+                current.push(ch);
+            }
         }
     }
-    if !current.is_empty() { parts.push(current); }
+    if !current.is_empty() {
+        parts.push(current);
+    }
     parts
 }
 
@@ -35,7 +51,10 @@ fn test_command_with_args() {
 
 #[test]
 fn test_double_quotes() {
-    assert_eq!(parse_line(r#"echo "hello world""#), vec!["echo", "hello world"]);
+    assert_eq!(
+        parse_line(r#"echo "hello world""#),
+        vec!["echo", "hello world"]
+    );
 }
 
 #[test]
@@ -45,7 +64,10 @@ fn test_single_quotes() {
 
 #[test]
 fn test_escape() {
-    assert_eq!(parse_line(r"echo hello\ world"), vec!["echo", "hello world"]);
+    assert_eq!(
+        parse_line(r"echo hello\ world"),
+        vec!["echo", "hello world"]
+    );
 }
 
 #[test]
@@ -67,10 +89,31 @@ fn test_tabs() {
 #[test]
 fn test_builtin_commands() {
     let builtins = vec![
-        "help", "echo", "ls", "cat", "mkdir", "touch", "rm", "write",
-        "pwd", "cd", "stat", "free", "uptime", "uname", "ps", "hexdump",
-        "dmesg", "clear", "shutdown", "reboot", "pipe-test", "stress",
-        "bench", "leakcheck", "run-user",
+        "help",
+        "echo",
+        "ls",
+        "cat",
+        "mkdir",
+        "touch",
+        "rm",
+        "write",
+        "pwd",
+        "cd",
+        "stat",
+        "free",
+        "uptime",
+        "uname",
+        "ps",
+        "hexdump",
+        "dmesg",
+        "clear",
+        "shutdown",
+        "reboot",
+        "pipe-test",
+        "stress",
+        "bench",
+        "leakcheck",
+        "run-user",
     ];
     assert!(builtins.len() >= 24);
     assert!(builtins.contains(&"cd"));
