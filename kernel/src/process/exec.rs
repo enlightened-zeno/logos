@@ -54,21 +54,20 @@ fn jump_to_user(entry: u64, user_rsp: u64, cr3: u64) -> ! {
     }
 
     // Use IRETQ to jump to ring 3.
-    // Stack frame for IRETQ: SS, RSP, RFLAGS, CS, RIP
+    // We build the IRETQ frame on the current kernel stack.
+    // Stack frame for IRETQ (pushed in reverse): RIP, CS, RFLAGS, RSP, SS
     // SAFETY: We set up a valid IRETQ frame to enter user mode.
     unsafe {
         core::arch::asm!(
-            "mov rsp, {kstack}",  // Use a clean kernel stack area
             "push {ss}",         // SS = user data segment
             "push {rsp_user}",   // RSP = user stack
-            "push {rflags}",     // RFLAGS = IF=1 (interrupts enabled)
+            "push {rflags}",     // RFLAGS = IF=1, reserved bit 1=1
             "push {cs}",         // CS = user code segment
             "push {rip}",        // RIP = entry point
             "iretq",
-            kstack = in(reg) user_rsp, // Temp: use user RSP area for IRETQ frame build
             ss = in(reg) gdt::USER_DS as u64,
             rsp_user = in(reg) user_rsp,
-            rflags = in(reg) 0x202u64, // IF=1, reserved bit 1=1
+            rflags = in(reg) 0x202u64,
             cs = in(reg) gdt::USER_CS as u64,
             rip = in(reg) entry,
             options(noreturn)

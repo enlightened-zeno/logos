@@ -484,6 +484,37 @@ fn kernel_main() -> ! {
         serial_println!("TEST ELF load into address space: PASS");
     }
 
+    // Test VFS → ELF exec path (write ELF to tmpfs, read back, parse)
+    {
+        extern crate alloc;
+        use fs::vfs::{InodeType, Vfs};
+
+        static USER_ELF: &[u8] = include_bytes!("test_user_program.bin");
+
+        // Write ELF to /tmp/test_program
+        let tmp = Vfs::resolve("/tmp").expect("resolve /tmp");
+        let file = tmp
+            .create("test_program", InodeType::File, 0o755)
+            .expect("create test_program");
+        file.write(0, USER_ELF).expect("write ELF");
+
+        // Read it back via VFS (same path sys_execve will use)
+        let inode = Vfs::resolve("/tmp/test_program").expect("resolve test_program");
+        let mut buf = alloc::vec![0u8; 1024];
+        let size = inode.read(0, &mut buf).expect("read ELF");
+        buf.truncate(size);
+
+        // Verify we can parse it
+        let info = process::elf::parse(&buf).expect("parse ELF from VFS");
+        assert_eq!(info.entry_point, 0x400000);
+        assert_eq!(info.segments.len(), 1);
+
+        // Clean up
+        tmp.unlink("test_program").expect("unlink");
+
+        serial_println!("TEST VFS exec path (write/read/parse ELF): PASS");
+    }
+
     // Test process table
     {
         use process::pid;

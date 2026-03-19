@@ -397,6 +397,35 @@ fn sys_wait4(pid: u64, status_ptr: u64, options: u64) -> SyscallResult {
 }
 
 fn sys_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> SyscallResult {
-    let _ = (path_ptr, argv_ptr, envp_ptr);
-    Errno::ENOSYS.as_neg()
+    extern crate alloc;
+    use crate::fs::vfs::Vfs;
+    use crate::syscall::validate;
+
+    let _ = (argv_ptr, envp_ptr); // TODO: pass argc/argv/envp to user stack
+
+    // Copy path from user space
+    let path = match validate::copy_str_from_user(path_ptr, 256) {
+        Ok(p) => p,
+        Err(e) => return e.as_neg(),
+    };
+
+    // Look up the file in VFS
+    let inode = match Vfs::resolve(&path) {
+        Ok(i) => i,
+        Err(e) => return e.as_neg(),
+    };
+
+    // Read the file contents
+    let mut elf_data = alloc::vec![0u8; 1024 * 1024]; // 1 MiB max
+    let size = match inode.read(0, &mut elf_data) {
+        Ok(n) => n,
+        Err(e) => return e.as_neg(),
+    };
+    elf_data.truncate(size);
+
+    // Get the HHDM offset
+    let hhdm_offset = crate::memory::pmm::Pmm::get().hhdm_offset();
+
+    // exec_elf never returns — it jumps to user mode
+    crate::process::exec::exec_elf(&elf_data, hhdm_offset);
 }
