@@ -93,10 +93,10 @@ jobs:
           echo "=== Validating ==="
           PASS=$(strings build/serial.log | grep -c "PASS")
           echo "Tests passed: $PASS"
-          grep -q "Boot complete. Halting." build/serial.log
+          grep -q "Boot complete" build/serial.log
           grep -q "All memory tests passed." build/serial.log
           grep -q "All VFS tests passed." build/serial.log
           grep -q "All extended tests passed." build/serial.log
           grep -q "All data integrity tests passed." build/serial.log
-          test "$PASS" -ge 100 || { echo "FAIL: only $PASS tests passed (need 100+)"; exit 1; }
+          test "$PASS" -ge 150 || { echo "FAIL: only $PASS tests passed (need 150+)"; exit 1; }
           echo "Kernel boot test passed ($PASS tests)."
