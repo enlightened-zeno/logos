@@ -684,6 +684,66 @@ fn kernel_main() -> ! {
         serial_println!("TEST COW reference counting: PASS");
     }
 
+    // Test COW page fault handler
+    {
+        use memory::addr::VirtAddr;
+        use memory::paging::PageFlags;
+
+        let pmm = memory::pmm::Pmm::get();
+        let vmm = memory::vmm::Vmm::get();
+
+        // Allocate a page and write a known value
+        let test_vaddr = VirtAddr::new_canonicalize(0xFFFF_E000_0010_0000);
+        let frame = pmm.alloc().expect("alloc for COW test");
+
+        // Write known data to the frame via HHDM
+        let hhdm = pmm.hhdm_offset();
+        let data_ptr = (frame.start_address().as_u64() + hhdm) as *mut u64;
+        // SAFETY: Frame is freshly allocated and mapped via HHDM.
+        unsafe { *data_ptr = 0xDEADBEEF_CAFEBABE };
+
+        // Map the page as read-only with COW bit (present but not writable)
+        let cow_flags = PageFlags::NO_EXECUTE | PageFlags::COW;
+        vmm.map_page(test_vaddr, frame, cow_flags)
+            .expect("map COW page");
+
+        // Set ref count to 2 (simulating a shared page after fork)
+        memory::cow::inc_ref(frame);
+        memory::cow::inc_ref(frame);
+        assert_eq!(memory::cow::ref_count(frame), 2);
+
+        // Read should work (page is present, readable)
+        let read_val: u64 = unsafe { *(test_vaddr.as_u64() as *const u64) };
+        assert_eq!(read_val, 0xDEADBEEF_CAFEBABE, "Read from COW page failed");
+
+        // Write should trigger COW fault → handler copies page
+        // SAFETY: The COW handler will allocate a new frame and remap writable.
+        unsafe { *(test_vaddr.as_u64() as *mut u64) = 0x1234_5678_9ABC_DEF0 };
+
+        // Verify the write succeeded (on the new copy)
+        let after_write: u64 = unsafe { *(test_vaddr.as_u64() as *const u64) };
+        assert_eq!(after_write, 0x1234_5678_9ABC_DEF0, "COW write didn't stick");
+
+        // Original frame should still have the old data
+        let orig_val: u64 = unsafe { *data_ptr };
+        assert_eq!(orig_val, 0xDEADBEEF_CAFEBABE, "Original frame was modified");
+
+        // Ref count of original should now be 1 (decremented by COW handler)
+        assert_eq!(
+            memory::cow::ref_count(frame),
+            1,
+            "COW didn't decrement ref count"
+        );
+
+        // Clean up
+        vmm.unmap_page(test_vaddr).ok();
+        memory::cow::dec_ref(frame);
+        // SAFETY: Frame was allocated by us.
+        unsafe { pmm.dealloc(frame) };
+
+        serial_println!("TEST COW page fault handler: PASS");
+    }
+
     // Test signals
     {
         use process::signal::{Signal, SignalState};

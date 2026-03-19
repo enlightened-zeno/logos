@@ -241,10 +241,9 @@ impl AddressSpace {
                             let frame_addr = pte.frame_address();
                             let frame = PhysFrame::containing_address(PhysAddr::new(frame_addr));
 
-                            // Mark parent page as read-only (remove WRITABLE)
+                            // Mark parent page as read-only (remove WRITABLE, add COW)
                             let mut flags = pte.raw() & !PageFlags::WRITABLE.bits();
-                            // Set a COW marker bit (use bit 9, available for OS use)
-                            flags |= 1 << 9; // COW bit
+                            flags |= PageFlags::COW.bits();
                             (*parent_pte).set_raw(flags);
 
                             // Child gets same mapping, also read-only with COW bit

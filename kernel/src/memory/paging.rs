@@ -15,6 +15,8 @@ bitflags! {
         const DIRTY         = 1 << 6;
         const HUGE_PAGE     = 1 << 7;
         const GLOBAL        = 1 << 8;
+        /// OS-defined: Copy-on-Write marker (available bit 9).
+        const COW           = 1 << 9;
         const NO_EXECUTE    = 1 << 63;
     }
 }

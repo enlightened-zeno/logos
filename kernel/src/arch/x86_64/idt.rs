@@ -221,10 +221,116 @@ extern "x86-interrupt" fn isr_page_fault(frame: InterruptFrame, error_code: u64)
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack));
     }
+
+    // Check for COW fault: bit 0 (present) + bit 1 (write) = write to present page
+    let is_write = error_code & 2 != 0;
+    let is_present = error_code & 1 != 0;
+
+    if is_write && is_present {
+        // Check if the PTE has the COW bit (bit 9)
+        if handle_cow_fault(cr2) {
+            return; // COW handled successfully, resume execution
+        }
+    }
+
     panic!(
         "PAGE FAULT at {:#x} (error={:#x}, addr={:#x})\n{:?}",
         frame.rip, error_code, cr2, frame
     );
+}
+
+/// Handle a COW (Copy-on-Write) page fault.
+/// Returns true if the fault was a COW fault and was handled.
+fn handle_cow_fault(fault_addr: u64) -> bool {
+    use crate::memory::addr::{PhysAddr, PhysFrame, VirtAddr, PAGE_SIZE};
+    use crate::memory::cow;
+    use crate::memory::paging::{PageFlags, PageTable};
+    use crate::memory::pmm::Pmm;
+
+    let pmm = Pmm::get();
+    let hhdm = pmm.hhdm_offset();
+
+    // Get current CR3
+    let cr3: u64;
+    // SAFETY: Reading CR3 is always safe.
+    unsafe {
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    }
+
+    let pml4_phys = cr3 & 0x000F_FFFF_FFFF_F000;
+    let vaddr = VirtAddr::new(fault_addr & !0xFFF); // Page-align
+
+    // Walk page tables to find the PTE
+    let p4_idx = (vaddr.as_u64() >> 39) & 0x1FF;
+    let p3_idx = (vaddr.as_u64() >> 30) & 0x1FF;
+    let p2_idx = (vaddr.as_u64() >> 21) & 0x1FF;
+    let p1_idx = (vaddr.as_u64() >> 12) & 0x1FF;
+
+    // SAFETY: Walking valid page tables via HHDM.
+    unsafe {
+        let p4 = (pml4_phys + hhdm) as *mut PageTable;
+        let p4e = &(*p4).entries[p4_idx as usize];
+        if !p4e.is_present() {
+            return false;
+        }
+
+        let p3 = (p4e.frame_address() + hhdm) as *mut PageTable;
+        let p3e = &(*p3).entries[p3_idx as usize];
+        if !p3e.is_present() {
+            return false;
+        }
+
+        let p2 = (p3e.frame_address() + hhdm) as *mut PageTable;
+        let p2e = &(*p2).entries[p2_idx as usize];
+        if !p2e.is_present() {
+            return false;
+        }
+
+        let p1 = (p2e.frame_address() + hhdm) as *mut PageTable;
+        let pte = &mut (*p1).entries[p1_idx as usize];
+
+        // Check COW bit
+        let cow_bit = PageFlags::COW.bits();
+        if pte.raw() & cow_bit == 0 {
+            return false; // Not a COW page
+        }
+
+        let old_frame_addr = pte.frame_address();
+        let old_frame = PhysFrame::containing_address(PhysAddr::new(old_frame_addr));
+
+        if cow::ref_count(old_frame) <= 1 {
+            // Last reference — just make writable, remove COW bit
+            let new_raw = (pte.raw() | PageFlags::WRITABLE.bits()) & !cow_bit;
+            pte.set_raw(new_raw);
+        } else {
+            // Shared — copy the page
+            let new_frame = match pmm.alloc() {
+                Some(f) => f,
+                None => return false, // OOM during COW — can't handle
+            };
+
+            // Copy page contents via HHDM
+            let src = (old_frame_addr + hhdm) as *const u8;
+            let dst = (new_frame.start_address().as_u64() + hhdm) as *mut u8;
+            core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE as usize);
+
+            // Update PTE: new frame, writable, no COW bit
+            let flags = ((pte.raw() & 0xFFF) | PageFlags::WRITABLE.bits()) & !cow_bit;
+            pte.set_raw(new_frame.start_address().as_u64() | flags);
+
+            // Decrement old frame ref count
+            cow::dec_ref(old_frame);
+        }
+
+        // Flush TLB for this page
+        core::arch::asm!(
+            "invlpg [{}]",
+            in(reg) fault_addr,
+            options(nostack)
+        );
+
+        true
+    }
 }
 
 extern "x86-interrupt" fn isr_x87_fpe(frame: InterruptFrame) {
