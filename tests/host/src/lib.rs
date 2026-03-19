@@ -31,3 +31,13 @@ mod pipe_tests;
 mod block_cache_tests;
 #[cfg(test)]
 mod ext2_tests;
+#[cfg(test)]
+mod boot_tests;
+#[cfg(test)]
+mod oom_tests;
+#[cfg(test)]
+mod power_tests;
+#[cfg(test)]
+mod smp_tests;
+#[cfg(test)]
+mod tty_tests;
