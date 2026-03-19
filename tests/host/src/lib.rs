@@ -99,3 +99,7 @@ mod tmpfs_tests;
 mod util_tests;
 #[cfg(test)]
 mod io_tests;
+#[cfg(test)]
+mod integration_tests;
+#[cfg(test)]
+mod invariant_tests;
