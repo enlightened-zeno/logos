@@ -57,3 +57,21 @@ mod data_integrity_tests;
 mod shell_tests;
 #[cfg(test)]
 mod sync_tests;
+#[cfg(test)]
+mod virtio_tests;
+#[cfg(test)]
+mod pci_tests;
+#[cfg(test)]
+mod acpi_tests;
+#[cfg(test)]
+mod coreutils_tests;
+#[cfg(test)]
+mod fault_injection_tests;
+#[cfg(test)]
+mod recovery_tests;
+#[cfg(test)]
+mod race_tests;
+#[cfg(test)]
+mod liblogos_tests;
+#[cfg(test)]
+mod address_space_tests;
