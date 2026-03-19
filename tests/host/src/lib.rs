@@ -81,3 +81,15 @@ mod leak_tests;
 mod soak_tests;
 #[cfg(test)]
 mod xsys_tests;
+#[cfg(test)]
+mod framebuffer_tests;
+#[cfg(test)]
+mod serial_tests;
+#[cfg(test)]
+mod perf_tests;
+#[cfg(test)]
+mod interop_tests;
+#[cfg(test)]
+mod devfs_tests;
+#[cfg(test)]
+mod procfs_tests;
