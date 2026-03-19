@@ -538,6 +538,100 @@ fn kernel_main() -> ! {
         serial_println!("TEST process table: PASS");
     }
 
+    // Test exit/wait4/reparenting
+    {
+        use process::pid;
+
+        // Create parent (PID N) and child (PID N+1)
+        let parent_pid = pid::alloc_pid();
+        pid::register(pid::ProcessDesc {
+            pid: parent_pid,
+            ppid: 1,
+            pgid: parent_pid,
+            sid: parent_pid,
+            state: pid::ProcessState::Running,
+            exit_code: 0,
+            uid: 0,
+            gid: 0,
+        });
+
+        let child_pid = pid::alloc_pid();
+        pid::register(pid::ProcessDesc {
+            pid: child_pid,
+            ppid: parent_pid,
+            pgid: parent_pid,
+            sid: parent_pid,
+            state: pid::ProcessState::Running,
+            exit_code: 0,
+            uid: 0,
+            gid: 0,
+        });
+
+        // Verify parent has children
+        assert!(pid::has_children(parent_pid));
+
+        // Child exits with code 7
+        pid::set_zombie(child_pid, 7);
+
+        // Parent finds zombie child
+        let (zpid, zcode) = pid::find_zombie_child(parent_pid, u64::MAX).expect("find zombie");
+        assert_eq!(zpid, child_pid);
+        assert_eq!(zcode, 7);
+
+        // Reap the zombie
+        let code = pid::reap(child_pid).expect("reap");
+        assert_eq!(code, 7);
+
+        // No more zombie children
+        assert!(pid::find_zombie_child(parent_pid, u64::MAX).is_none());
+
+        // Test reparenting: create a grandchild
+        let grandchild_pid = pid::alloc_pid();
+        pid::register(pid::ProcessDesc {
+            pid: grandchild_pid,
+            ppid: parent_pid,
+            pgid: parent_pid,
+            sid: parent_pid,
+            state: pid::ProcessState::Running,
+            exit_code: 0,
+            uid: 0,
+            gid: 0,
+        });
+
+        // Parent exits — grandchild should be reparented to init
+        pid::reparent_children(parent_pid);
+        assert_eq!(pid::get_ppid(grandchild_pid), Some(1));
+
+        // Clean up
+        pid::set_zombie(parent_pid, 0);
+        pid::reap(parent_pid);
+        pid::set_zombie(grandchild_pid, 0);
+        pid::reap(grandchild_pid);
+
+        serial_println!("TEST exit/wait4/reparent: PASS");
+    }
+
+    // Test wait4 with no children returns ECHILD
+    {
+        use process::pid;
+        let lonely_pid = pid::alloc_pid();
+        pid::register(pid::ProcessDesc {
+            pid: lonely_pid,
+            ppid: 1,
+            pgid: 1,
+            sid: 1,
+            state: pid::ProcessState::Running,
+            exit_code: 0,
+            uid: 0,
+            gid: 0,
+        });
+        assert!(!pid::has_children(lonely_pid));
+        assert!(pid::find_zombie_child(lonely_pid, u64::MAX).is_none());
+        pid::set_zombie(lonely_pid, 0);
+        pid::reap(lonely_pid);
+        serial_println!("TEST wait4 ECHILD (no children): PASS");
+    }
+
     // Test signals
     {
         use process::signal::{Signal, SignalState};

@@ -124,6 +124,45 @@ pub fn reparent_children(parent_pid: Pid) {
     }
 }
 
+/// Find a zombie child of the given parent.
+/// If `target_pid` is -1 (u64::MAX), returns any zombie child.
+/// If `target_pid` is a specific PID, returns that child if zombie.
+pub fn find_zombie_child(parent_pid: Pid, target_pid: u64) -> Option<(Pid, i32)> {
+    let guard = PROC_TABLE.lock();
+    let table = guard.as_ref()?;
+
+    if target_pid == u64::MAX {
+        // Wait for any child
+        for proc in table.procs.values() {
+            if proc.ppid == parent_pid && proc.state == ProcessState::Zombie {
+                return Some((proc.pid, proc.exit_code));
+            }
+        }
+    } else {
+        // Wait for specific child
+        let proc = table.procs.get(&target_pid)?;
+        if proc.ppid == parent_pid && proc.state == ProcessState::Zombie {
+            return Some((proc.pid, proc.exit_code));
+        }
+    }
+    None
+}
+
+/// Check if a given PID has any children.
+pub fn has_children(parent_pid: Pid) -> bool {
+    let guard = PROC_TABLE.lock();
+    guard
+        .as_ref()
+        .map(|t| t.procs.values().any(|p| p.ppid == parent_pid))
+        .unwrap_or(false)
+}
+
+/// Get the parent PID of a process.
+pub fn get_ppid(pid: Pid) -> Option<Pid> {
+    let guard = PROC_TABLE.lock();
+    guard.as_ref()?.procs.get(&pid).map(|p| p.ppid)
+}
+
 /// List all processes (for ps command).
 pub fn list() -> alloc::vec::Vec<(Pid, Pid, ProcessState)> {
     let guard = PROC_TABLE.lock();

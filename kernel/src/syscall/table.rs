@@ -1,4 +1,18 @@
 use crate::syscall::errno::{Errno, SyscallResult};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Current process ID. Updated on context switch.
+static CURRENT_PID: AtomicU64 = AtomicU64::new(1); // Starts as init (PID 1)
+
+/// Get the current process PID.
+fn current_pid() -> u64 {
+    CURRENT_PID.load(Ordering::Relaxed)
+}
+
+/// Set the current process PID (called on context switch or exec).
+pub fn set_current_pid(pid: u64) {
+    CURRENT_PID.store(pid, Ordering::Relaxed);
+}
 
 /// Syscall numbers (Linux-compatible subset).
 pub const SYS_READ: u64 = 0;
@@ -102,11 +116,11 @@ pub fn dispatch(
 // Stub implementations — these will be replaced as subsystems come online.
 
 fn sys_getpid() -> SyscallResult {
-    crate::sched::current_task_id().0 as i64
+    current_pid() as i64
 }
 
 fn sys_getppid() -> SyscallResult {
-    1 // init is always parent for now
+    crate::process::pid::get_ppid(current_pid()).unwrap_or(0) as i64
 }
 
 fn sys_getuid() -> SyscallResult {
@@ -168,8 +182,16 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
 }
 
 fn sys_exit(code: i32) -> SyscallResult {
-    crate::serial_println!("Process {} exited with code {}", sys_getpid(), code);
-    // For now, halt
+    let pid = current_pid();
+    crate::serial_println!("Process {} exited with code {}", pid, code);
+
+    // Reparent children to init
+    crate::process::pid::reparent_children(pid);
+
+    // Mark self as zombie
+    crate::process::pid::set_zombie(pid, code);
+
+    // Halt this process (in a real system, switch to another task)
     loop {
         crate::arch::x86_64::cpu::hlt();
     }
@@ -391,9 +413,38 @@ fn sys_fork() -> SyscallResult {
     Errno::ENOSYS.as_neg()
 }
 
-fn sys_wait4(pid: u64, status_ptr: u64, options: u64) -> SyscallResult {
-    let _ = (pid, status_ptr, options);
-    Errno::ECHILD.as_neg()
+fn sys_wait4(target_pid: u64, status_ptr: u64, options: u64) -> SyscallResult {
+    use crate::process::pid;
+    use crate::syscall::validate;
+
+    let _ = options;
+    let parent = current_pid();
+
+    // Check if parent has children at all
+    if !pid::has_children(parent) {
+        return Errno::ECHILD.as_neg();
+    }
+
+    // Try to find a zombie child
+    match pid::find_zombie_child(parent, target_pid) {
+        Some((child_pid, exit_code)) => {
+            // Reap the zombie
+            pid::reap(child_pid);
+
+            // Write status to user if pointer provided
+            if status_ptr != 0 {
+                let status = (exit_code & 0xFF) << 8; // WEXITSTATUS encoding
+                let _ = validate::copy_to_user(status_ptr, &status.to_le_bytes());
+            }
+
+            child_pid as i64
+        }
+        None => {
+            // No zombie child yet — would block in a real implementation
+            // For now, return ECHILD
+            Errno::ECHILD.as_neg()
+        }
+    }
 }
 
 fn sys_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> SyscallResult {
