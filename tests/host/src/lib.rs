@@ -41,3 +41,11 @@ mod power_tests;
 mod smp_tests;
 #[cfg(test)]
 mod tty_tests;
+#[cfg(test)]
+mod keyboard_tests;
+#[cfg(test)]
+mod shm_tests;
+#[cfg(test)]
+mod log_tests;
+#[cfg(test)]
+mod panic_tests;
