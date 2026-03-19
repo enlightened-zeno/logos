@@ -115,3 +115,5 @@ mod sched_spec_tests;
 mod fs_spec_tests;
 #[cfg(test)]
 mod ipc_spec_tests;
+#[cfg(test)]
+mod remaining_spec_tests;
