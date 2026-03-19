@@ -15,3 +15,9 @@ mod chacha20_tests;
 mod fd_tests;
 #[cfg(test)]
 mod process_tests;
+#[cfg(test)]
+mod memory_tests;
+#[cfg(test)]
+mod vfs_tests;
+#[cfg(test)]
+mod syscall_tests;
