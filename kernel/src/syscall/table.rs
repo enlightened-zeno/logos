@@ -409,8 +409,63 @@ fn sys_setsid() -> SyscallResult {
 }
 
 fn sys_fork() -> SyscallResult {
-    // Would clone the current process with COW
-    Errno::ENOSYS.as_neg()
+    use crate::process::{address_space::AddressSpace, pid};
+
+    let parent_pid = current_pid();
+    let hhdm_offset = crate::memory::pmm::Pmm::get().hhdm_offset();
+
+    // Get the current address space's CR3
+    let current_cr3: u64;
+    // SAFETY: Reading CR3 is always safe.
+    unsafe {
+        core::arch::asm!("mov {}, cr3", out(reg) current_cr3, options(nomem, nostack));
+    }
+
+    // Create the parent's AddressSpace wrapper (for fork)
+    let parent_as = AddressSpace {
+        pml4_frame: crate::memory::addr::PhysFrame::containing_address(
+            crate::memory::addr::PhysAddr::new(current_cr3 & 0x000F_FFFF_FFFF_F000),
+        ),
+        brk: 0,
+        hhdm_offset,
+    };
+
+    // Fork the address space (COW clone)
+    let child_as = match parent_as.fork() {
+        Ok(a) => a,
+        Err(e) => {
+            // Don't drop parent_as — it doesn't own the current page tables
+            core::mem::forget(parent_as);
+            return e.as_neg();
+        }
+    };
+
+    // Don't drop parent_as — it doesn't own the current page tables
+    core::mem::forget(parent_as);
+
+    // Allocate a new PID
+    let child_pid = pid::alloc_pid();
+
+    // Register the child process
+    pid::register(pid::ProcessDesc {
+        pid: child_pid,
+        ppid: parent_pid,
+        pgid: parent_pid, // Inherit parent's process group
+        sid: parent_pid,
+        state: pid::ProcessState::Running,
+        exit_code: 0,
+        uid: 0,
+        gid: 0,
+    });
+
+    // Store child's address space CR3 for later context switch
+    // (For now, we just forget it — the child won't run until
+    // we have a proper scheduler integration)
+    let _child_cr3 = child_as.cr3();
+    core::mem::forget(child_as);
+
+    // Return child PID to parent (child would get 0 in a real fork)
+    child_pid as i64
 }
 
 fn sys_wait4(target_pid: u64, status_ptr: u64, options: u64) -> SyscallResult {

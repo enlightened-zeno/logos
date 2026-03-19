@@ -64,6 +64,23 @@ impl PageTableEntry {
     pub fn raw(&self) -> u64 {
         self.0
     }
+
+    #[inline]
+    pub fn set_raw(&mut self, raw: u64) {
+        self.0 = raw;
+    }
+
+    /// Get the physical frame address (bits 12-51).
+    #[inline]
+    pub fn frame_address(&self) -> u64 {
+        self.0 & 0x000F_FFFF_FFFF_F000
+    }
+
+    /// Create a new entry from a physical address and raw flags.
+    #[inline]
+    pub fn new(phys_addr: u64, flags: u64) -> Self {
+        Self((phys_addr & 0x000F_FFFF_FFFF_F000) | (flags & 0xFFF))
+    }
 }
 
 /// A page table: 512 entries, 4 KiB aligned.

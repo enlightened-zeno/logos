@@ -1,7 +1,7 @@
 extern crate alloc;
 
-use crate::memory::addr::{PhysFrame, VirtAddr, PAGE_SIZE};
-use crate::memory::paging::{PageFlags, PageMapper, PageTable};
+use crate::memory::addr::{PhysAddr, PhysFrame, VirtAddr, PAGE_SIZE};
+use crate::memory::paging::{PageFlags, PageMapper, PageTable, PageTableEntry};
 use crate::memory::pmm::Pmm;
 use crate::syscall::errno::Errno;
 
@@ -18,7 +18,7 @@ pub struct AddressSpace {
     /// Current program break (heap end).
     pub brk: u64,
     /// HHDM offset for page table access.
-    hhdm_offset: u64,
+    pub hhdm_offset: u64,
 }
 
 impl AddressSpace {
@@ -126,6 +126,144 @@ impl AddressSpace {
     /// Get the PML4 physical address (for CR3).
     pub fn cr3(&self) -> u64 {
         self.pml4_frame.start_address().as_u64()
+    }
+
+    /// Fork this address space (COW clone).
+    ///
+    /// Creates a new address space that shares all user pages with the parent.
+    /// All shared pages are marked read-only in both parent and child. A write
+    /// fault on a shared page triggers a copy (handled by the page fault handler).
+    pub fn fork(&self) -> Result<Self, Errno> {
+        use crate::memory::cow;
+        use crate::memory::paging::PageTableEntry;
+
+        let pmm = Pmm::get();
+
+        // Create new PML4
+        let child_pml4_frame = pmm.alloc().ok_or(Errno::ENOMEM)?;
+        let child_pml4_virt =
+            (child_pml4_frame.start_address().as_u64() + self.hhdm_offset) as *mut PageTable;
+
+        // SAFETY: Frame is freshly allocated and mapped via HHDM.
+        unsafe { (*child_pml4_virt).zero() };
+
+        let parent_pml4_virt =
+            (self.pml4_frame.start_address().as_u64() + self.hhdm_offset) as *const PageTable;
+
+        // SAFETY: Both PML4s are valid and mapped via HHDM.
+        unsafe {
+            // Copy kernel half (entries 256-511) — shared, not COW
+            for i in 256..512 {
+                (*child_pml4_virt).entries[i] = (*parent_pml4_virt).entries[i];
+            }
+
+            // Clone user half (entries 0-255) with COW
+            for p4_idx in 0..256 {
+                let p4_entry = &(*parent_pml4_virt).entries[p4_idx];
+                if !p4_entry.is_present() {
+                    continue;
+                }
+
+                // Allocate new PDP for child
+                let child_pdp_frame = pmm.alloc().ok_or(Errno::ENOMEM)?;
+                let child_pdp =
+                    (child_pdp_frame.start_address().as_u64() + self.hhdm_offset) as *mut PageTable;
+                (*child_pdp).zero();
+
+                let parent_pdp = Self::entry_to_table(p4_entry, self.hhdm_offset);
+
+                for p3_idx in 0..512 {
+                    let p3_entry = &(*parent_pdp).entries[p3_idx];
+                    if !p3_entry.is_present() {
+                        continue;
+                    }
+
+                    // Allocate new PD for child
+                    let child_pd_frame = pmm.alloc().ok_or(Errno::ENOMEM)?;
+                    let child_pd = (child_pd_frame.start_address().as_u64() + self.hhdm_offset)
+                        as *mut PageTable;
+                    (*child_pd).zero();
+
+                    let parent_pd = Self::entry_to_table(p3_entry, self.hhdm_offset);
+
+                    for p2_idx in 0..512 {
+                        let p2_entry = &(*parent_pd).entries[p2_idx];
+                        if !p2_entry.is_present() {
+                            continue;
+                        }
+
+                        // Allocate new PT for child
+                        let child_pt_frame = pmm.alloc().ok_or(Errno::ENOMEM)?;
+                        let child_pt = (child_pt_frame.start_address().as_u64() + self.hhdm_offset)
+                            as *mut PageTable;
+                        (*child_pt).zero();
+
+                        let parent_pt = Self::entry_to_table(p2_entry, self.hhdm_offset);
+
+                        for p1_idx in 0..512 {
+                            let parent_pte =
+                                &mut (*parent_pt).entries[p1_idx] as *mut PageTableEntry;
+                            let pte = &*parent_pte;
+                            if !pte.is_present() {
+                                continue;
+                            }
+
+                            // Get the physical frame this PTE points to
+                            let frame_addr = pte.frame_address();
+                            let frame = PhysFrame::containing_address(PhysAddr::new(frame_addr));
+
+                            // Mark parent page as read-only (remove WRITABLE)
+                            let mut flags = pte.raw() & !PageFlags::WRITABLE.bits();
+                            // Set a COW marker bit (use bit 9, available for OS use)
+                            flags |= 1 << 9; // COW bit
+                            (*parent_pte).set_raw(flags);
+
+                            // Child gets same mapping, also read-only with COW bit
+                            (*child_pt).entries[p1_idx].set_raw(flags);
+
+                            // Increment COW reference count
+                            cow::inc_ref(frame);
+                        }
+
+                        // Wire child PT into child PD
+                        (*child_pd).entries[p2_idx] = PageTableEntry::new(
+                            child_pt_frame.start_address().as_u64(),
+                            p2_entry.raw() & 0xFFF, // Preserve flags
+                        );
+                    }
+
+                    // Wire child PD into child PDP
+                    (*child_pdp).entries[p3_idx] = PageTableEntry::new(
+                        child_pd_frame.start_address().as_u64(),
+                        p3_entry.raw() & 0xFFF,
+                    );
+                }
+
+                // Wire child PDP into child PML4
+                (*child_pml4_virt).entries[p4_idx] = PageTableEntry::new(
+                    child_pdp_frame.start_address().as_u64(),
+                    p4_entry.raw() & 0xFFF,
+                );
+            }
+        }
+
+        // Flush TLB for parent (pages are now read-only)
+        // SAFETY: Flushing TLB is always safe.
+        unsafe {
+            core::arch::asm!("mov rax, cr3", "mov cr3, rax", out("rax") _, options(nostack));
+        }
+
+        Ok(Self {
+            pml4_frame: child_pml4_frame,
+            brk: self.brk,
+            hhdm_offset: self.hhdm_offset,
+        })
+    }
+
+    /// Convert a page table entry to a table pointer via HHDM.
+    unsafe fn entry_to_table(entry: &PageTableEntry, hhdm_offset: u64) -> *mut PageTable {
+        let phys = entry.frame_address();
+        (phys + hhdm_offset) as *mut PageTable
     }
 }
 

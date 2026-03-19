@@ -309,6 +309,7 @@ fn kernel_main() -> ! {
 
     // Initialize process table
     process::pid::init();
+    memory::cow::init();
 
     // Initialize scheduler
     sched::init();
@@ -630,6 +631,52 @@ fn kernel_main() -> ! {
         pid::set_zombie(lonely_pid, 0);
         pid::reap(lonely_pid);
         serial_println!("TEST wait4 ECHILD (no children): PASS");
+    }
+
+    // Test fork (COW address space cloning)
+    {
+        // Call sys_fork via dispatch — should succeed and return a child PID
+        let result = syscall::table::dispatch(57, 0, 0, 0, 0, 0, 0);
+        assert!(
+            result > 0,
+            "fork should return child PID > 0, got {}",
+            result
+        );
+        let child_pid = result as u64;
+
+        // Verify child is in the process table
+        let procs = process::pid::list();
+        assert!(
+            procs.iter().any(|(pid, _, _)| *pid == child_pid),
+            "Child should be in process table"
+        );
+
+        // Verify child's parent is the current PID
+        assert_eq!(process::pid::get_ppid(child_pid), Some(1));
+
+        // Clean up: zombie and reap
+        process::pid::set_zombie(child_pid, 0);
+        process::pid::reap(child_pid);
+
+        serial_println!("TEST fork (COW clone): PASS");
+    }
+
+    // Test COW reference counting
+    {
+        use memory::addr::PhysAddr;
+        let frame = memory::addr::PhysFrame::containing_address(PhysAddr::new(0x1000));
+        assert_eq!(memory::cow::ref_count(frame), 0);
+        memory::cow::inc_ref(frame);
+        assert_eq!(memory::cow::ref_count(frame), 1);
+        memory::cow::inc_ref(frame);
+        assert_eq!(memory::cow::ref_count(frame), 2);
+        assert!(memory::cow::is_shared(frame));
+        memory::cow::dec_ref(frame);
+        assert_eq!(memory::cow::ref_count(frame), 1);
+        assert!(!memory::cow::is_shared(frame));
+        memory::cow::dec_ref(frame);
+        assert_eq!(memory::cow::ref_count(frame), 0);
+        serial_println!("TEST COW reference counting: PASS");
     }
 
     // Test signals
@@ -1154,11 +1201,15 @@ fn extended_tests() {
         serial_println!("TEST SYS getuid/getgid: PASS");
     }
 
-    // SYS: fork returns ENOSYS (not yet implemented)
+    // SYS: fork returns child PID (now implemented with COW)
     {
         let result = syscall::table::dispatch(57, 0, 0, 0, 0, 0, 0);
-        assert!(result < 0, "fork should return error (not implemented)");
-        serial_println!("TEST SYS fork returns ENOSYS: PASS");
+        assert!(result > 0, "fork should return child PID > 0");
+        // Clean up the forked process
+        let child = result as u64;
+        process::pid::set_zombie(child, 0);
+        process::pid::reap(child);
+        serial_println!("TEST SYS fork returns PID: PASS");
     }
 
     // SYS: wait4 with no children returns ECHILD

@@ -3,6 +3,8 @@
 #[allow(dead_code)]
 pub mod addr;
 #[allow(dead_code)]
+pub mod cow;
+#[allow(dead_code)]
 pub mod heap;
 #[allow(dead_code)]
 pub mod oom;
