@@ -40,6 +40,7 @@ static FB: SpinLock<Option<FbConsole>> = SpinLock::new(None);
 static FB_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Enable framebuffer output. Call after boot init is complete.
+#[allow(dead_code)]
 pub fn activate() {
     FB_ACTIVE.store(true, core::sync::atomic::Ordering::Release);
 }

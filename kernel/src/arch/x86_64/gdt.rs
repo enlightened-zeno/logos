@@ -125,6 +125,11 @@ static mut BSP_GDT: Gdt = Gdt { entries: [0; 7] };
 static mut IST_STACKS: [[u8; IST_STACK_SIZE]; 3] = [[0; IST_STACK_SIZE]; 3];
 static mut KERNEL_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
 
+/// Get the kernel stack top address (for SYSCALL entry / per-CPU data).
+pub fn kernel_stack_top() -> u64 {
+    core::ptr::addr_of!(KERNEL_STACK) as u64 + IST_STACK_SIZE as u64
+}
+
 /// Initialize the GDT and TSS for the bootstrap processor.
 ///
 /// # Safety

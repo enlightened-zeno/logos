@@ -297,8 +297,7 @@ fn kernel_main() -> ! {
     // Initialize per-CPU data (needed for SWAPGS in syscall entry)
     // SAFETY: Called once after GDT/TSS.
     unsafe {
-        // Use the TSS RSP0 as the kernel stack for syscall entry
-        arch::x86_64::percpu::init(0); // Will be set properly when user processes run
+        arch::x86_64::percpu::init(arch::x86_64::gdt::kernel_stack_top());
     }
 
     // Initialize SYSCALL/SYSRET
@@ -733,14 +732,19 @@ fn kernel_main() -> ! {
         );
     }
 
-    serial_println!("Boot complete. Halting.");
+    serial_println!("All kernel tests passed. Launching user mode test...");
 
-    // Activate framebuffer output for the shell (not during tests — too slow)
-    drivers::framebuffer::activate();
-
-    // Initialize shell CWD and launch the interactive shell
-    shell::builtins::init_cwd();
-    shell::run()
+    // USER MODE PROOF-OF-LIFE TEST
+    // Load the embedded test ELF into a fresh address space and jump to ring 3.
+    // The user program does: write(1, "Hello from userspace!\n", 22) then exit(0).
+    // If this succeeds, we'll see "Hello from userspace!" on serial output.
+    {
+        static USER_ELF: &[u8] = include_bytes!("test_user_program.bin");
+        serial_println!("Entering user mode...");
+        process::exec::exec_elf(USER_ELF, hhdm_offset);
+        // exec_elf never returns — it jumps to ring 3.
+        // The user program calls SYS_EXIT which halts.
+    }
 }
 
 fn extended_tests() {
