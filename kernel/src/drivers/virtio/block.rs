@@ -187,6 +187,10 @@ pub unsafe fn init(pci: &PciDevice, hhdm_offset: u64) -> Result<(), &'static str
 
 /// Read sectors from the block device.
 pub fn read_sectors(start_sector: u64, buf: &mut [u8]) -> Result<(), &'static str> {
+    if crate::fault::should_fail(crate::fault::InjectionPoint::DiskRead) {
+        return Err("Injected disk read failure");
+    }
+
     if !buf.len().is_multiple_of(SECTOR_SIZE as usize) {
         return Err("Buffer size must be a multiple of sector size");
     }

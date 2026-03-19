@@ -178,6 +178,9 @@ impl Pmm {
 
     /// Allocate from the Normal zone (most common case).
     pub fn alloc(&self) -> Option<PhysFrame> {
+        if crate::fault::should_fail(crate::fault::InjectionPoint::PmmAlloc) {
+            return None;
+        }
         self.alloc_frame(Zone::Normal)
     }
 

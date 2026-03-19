@@ -2229,6 +2229,55 @@ fn data_integrity_tests() {
         );
     }
 
+    // Fault injection: verify PMM fail-every-N works
+    {
+        #[cfg(feature = "fault_injection")]
+        {
+            use core::sync::atomic::Ordering;
+            // Enable: fail every 3rd PMM alloc
+            fault::PMM_FAIL_EVERY_N.store(3, Ordering::Relaxed);
+
+            let pmm = memory::pmm::Pmm::get();
+            let mut fail_count = 0u32;
+            let mut success_count = 0u32;
+            for _ in 0..9 {
+                match pmm.alloc() {
+                    Some(f) => {
+                        success_count += 1;
+                        // SAFETY: Frame was just allocated.
+                        unsafe { pmm.dealloc(f) };
+                    }
+                    None => fail_count += 1,
+                }
+            }
+            // With fail every 3rd: calls 0,1,2,3,4,5,6,7,8
+            // Failures at 0,3,6 = 3 failures, 6 successes
+            assert!(fail_count >= 2, "Expected >=2 failures, got {}", fail_count);
+            assert!(
+                success_count >= 4,
+                "Expected >=4 successes, got {}",
+                success_count
+            );
+
+            // Disable
+            fault::PMM_FAIL_EVERY_N.store(0, Ordering::Relaxed);
+            // Verify normal alloc works again
+            let f = pmm
+                .alloc()
+                .expect("PMM should work after disabling fault injection");
+            // SAFETY: Frame was just allocated above.
+            unsafe { pmm.dealloc(f) };
+
+            serial_println!(
+                "TEST fault injection PMM: PASS (failed={}, succeeded={})",
+                fail_count,
+                success_count
+            );
+        }
+        #[cfg(not(feature = "fault_injection"))]
+        serial_println!("TEST fault injection PMM: SKIP (feature disabled)");
+    }
+
     // SYS-C07: sys_write to stdout
     {
         let msg = b"syscall write test";

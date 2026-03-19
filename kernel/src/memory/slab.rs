@@ -274,6 +274,10 @@ impl KernelAllocator {
 // Large allocations (>4096) and pre-init allocations go to the linked-list heap.
 unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if crate::fault::should_fail(crate::fault::InjectionPoint::SlabAlloc) {
+            return ptr::null_mut();
+        }
+
         let size = layout.size().max(layout.align());
 
         // Use slab for small allocations when active
