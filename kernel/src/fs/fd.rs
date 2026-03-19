@@ -1,7 +1,9 @@
 extern crate alloc;
 
 use crate::fs::vfs::Inode;
+use crate::sync::SpinLock;
 use crate::syscall::errno::Errno;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -134,4 +136,74 @@ impl FdTable {
         });
         Ok(new_fd)
     }
+
+    /// Create a new FdTable with stdin/stdout/stderr pre-opened.
+    ///
+    /// FD 0 = /dev/console (stdin)
+    /// FD 1 = /dev/console (stdout)
+    /// FD 2 = /dev/console (stderr)
+    pub fn with_stdio() -> Self {
+        use crate::fs::vfs::Vfs;
+
+        let mut table = Self::new();
+
+        // Try to open /dev/console for stdio
+        if let Ok(console) = Vfs::resolve("/dev/console") {
+            table.fds[0] = Some(FileDescriptor {
+                inode: console.clone(),
+                offset: 0,
+                flags: OpenFlags::RDONLY,
+            });
+            table.fds[1] = Some(FileDescriptor {
+                inode: console.clone(),
+                offset: 0,
+                flags: OpenFlags::WRONLY,
+            });
+            table.fds[2] = Some(FileDescriptor {
+                inode: console,
+                offset: 0,
+                flags: OpenFlags::WRONLY,
+            });
+        }
+
+        table
+    }
+}
+
+/// Global per-process FD table store.
+static FD_TABLES: SpinLock<Option<BTreeMap<u64, FdTable>>> = SpinLock::new(None);
+
+/// Initialize the global FD table store.
+pub fn init() {
+    let mut tables = BTreeMap::new();
+    // PID 1 (init/kernel) gets stdio
+    tables.insert(1, FdTable::with_stdio());
+    *FD_TABLES.lock() = Some(tables);
+}
+
+/// Create an FD table for a new process.
+pub fn create_for_pid(pid: u64) {
+    let mut guard = FD_TABLES.lock();
+    if let Some(tables) = guard.as_mut() {
+        tables.insert(pid, FdTable::with_stdio());
+    }
+}
+
+/// Remove the FD table for an exited process.
+pub fn remove_for_pid(pid: u64) {
+    let mut guard = FD_TABLES.lock();
+    if let Some(tables) = guard.as_mut() {
+        tables.remove(&pid);
+    }
+}
+
+/// Run a closure with the FD table of the given PID.
+pub fn with_fd_table<F, R>(pid: u64, f: F) -> Result<R, Errno>
+where
+    F: FnOnce(&mut FdTable) -> Result<R, Errno>,
+{
+    let mut guard = FD_TABLES.lock();
+    let tables = guard.as_mut().ok_or(Errno::ESRCH)?;
+    let table = tables.get_mut(&pid).ok_or(Errno::ESRCH)?;
+    f(table)
 }

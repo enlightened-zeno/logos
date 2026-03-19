@@ -159,6 +159,9 @@ fn sys_uname(buf_ptr: u64) -> SyscallResult {
 fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
     use crate::syscall::validate;
 
+    if count == 0 {
+        return 0;
+    }
     if count > 4096 {
         return Errno::EINVAL.as_neg();
     }
@@ -169,9 +172,22 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
         return e.as_neg();
     }
 
+    // Try per-process FD table first
+    let pid = current_pid();
+    if let Ok(n) = crate::fs::fd::with_fd_table(pid, |table| {
+        let fd_entry = table.get(fd as usize)?;
+        if fd_entry.flags.write {
+            fd_entry.inode.write(fd_entry.offset, slice)
+        } else {
+            Err(Errno::EBADF)
+        }
+    }) {
+        return n as i64;
+    }
+
+    // Fallback: direct serial output for stdout/stderr
     match fd {
         1 | 2 => {
-            // stdout/stderr → serial
             for &byte in slice.iter() {
                 crate::drivers::serial::write_byte(byte);
             }
@@ -183,6 +199,9 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
 
 fn sys_exit(code: i32) -> SyscallResult {
     let pid = current_pid();
+
+    // Close all open file descriptors
+    crate::fs::fd::remove_for_pid(pid);
 
     // Reparent children to init
     crate::process::pid::reparent_children(pid);
@@ -205,17 +224,37 @@ fn sys_read(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
         return Errno::EINVAL.as_neg();
     }
 
+    let mut kbuf = [0u8; 4096];
+    let n = count as usize;
+
+    // Try per-process FD table
+    let pid = current_pid();
+    if let Ok(bytes_read) = crate::fs::fd::with_fd_table(pid, |table| {
+        let fd_entry = table.get(fd as usize)?;
+        if fd_entry.flags.read {
+            fd_entry.inode.read(fd_entry.offset, &mut kbuf[..n])
+        } else {
+            Err(Errno::EBADF)
+        }
+    }) {
+        if bytes_read > 0 {
+            if let Err(e) = validate::copy_to_user(buf_ptr, &kbuf[..bytes_read]) {
+                return e.as_neg();
+            }
+        }
+        return bytes_read as i64;
+    }
+
+    // Fallback: stdin from TTY
     match fd {
         0 => {
-            // stdin: read from TTY
-            let mut kbuf = [0u8; 4096];
-            let n = crate::tty::read(&mut kbuf[..count as usize]);
-            if n > 0 {
-                if let Err(e) = validate::copy_to_user(buf_ptr, &kbuf[..n]) {
+            let nr = crate::tty::read(&mut kbuf[..n]);
+            if nr > 0 {
+                if let Err(e) = validate::copy_to_user(buf_ptr, &kbuf[..nr]) {
                     return e.as_neg();
                 }
             }
-            n as i64
+            nr as i64
         }
         _ => Errno::EBADF.as_neg(),
     }
@@ -266,36 +305,57 @@ fn sys_pipe(fds_ptr: u64) -> SyscallResult {
 }
 
 fn sys_dup(fd: u64) -> SyscallResult {
-    let _ = fd;
-    Errno::ENOSYS.as_neg()
+    let pid = current_pid();
+    match crate::fs::fd::with_fd_table(pid, |table| table.dup(fd as usize)) {
+        Ok(new_fd) => new_fd as i64,
+        Err(e) => e.as_neg(),
+    }
 }
 
 fn sys_dup2(old_fd: u64, new_fd: u64) -> SyscallResult {
-    let _ = (old_fd, new_fd);
-    Errno::ENOSYS.as_neg()
+    let pid = current_pid();
+    match crate::fs::fd::with_fd_table(pid, |table| table.dup2(old_fd as usize, new_fd as usize)) {
+        Ok(fd) => fd as i64,
+        Err(e) => e.as_neg(),
+    }
 }
 
 fn sys_close(fd: u64) -> SyscallResult {
-    let _ = fd;
-    Errno::ENOSYS.as_neg()
+    let pid = current_pid();
+    match crate::fs::fd::with_fd_table(pid, |table| table.close(fd as usize)) {
+        Ok(()) => 0,
+        Err(e) => e.as_neg(),
+    }
 }
 
 fn sys_open(path_ptr: u64, flags: u64, mode: u64) -> SyscallResult {
+    use crate::fs::fd::OpenFlags;
+    use crate::fs::vfs::Vfs;
     use crate::syscall::validate;
-    let _ = (flags, mode);
+    let _ = mode;
 
     let path = match validate::copy_str_from_user(path_ptr, 256) {
         Ok(p) => p,
         Err(e) => return e.as_neg(),
     };
 
-    // Use VFS to look up the file
-    match crate::fs::vfs::Vfs::resolve(&path).ok() {
-        Some(_inode) => {
-            // Would allocate an FD — return 3 as placeholder (0=stdin, 1=stdout, 2=stderr)
-            3
-        }
-        None => Errno::ENOENT.as_neg(),
+    let inode = match Vfs::resolve(&path) {
+        Ok(i) => i,
+        Err(e) => return e.as_neg(),
+    };
+
+    // Translate flags (O_RDONLY=0, O_WRONLY=1, O_RDWR=2)
+    let open_flags = match flags & 3 {
+        0 => OpenFlags::RDONLY,
+        1 => OpenFlags::WRONLY,
+        2 => OpenFlags::RDWR,
+        _ => OpenFlags::RDONLY,
+    };
+
+    let pid = current_pid();
+    match crate::fs::fd::with_fd_table(pid, |table| table.alloc(inode, open_flags)) {
+        Ok(fd) => fd as i64,
+        Err(e) => e.as_neg(),
     }
 }
 
@@ -456,9 +516,10 @@ fn sys_fork() -> SyscallResult {
         gid: 0,
     });
 
+    // Create FD table for the child process
+    crate::fs::fd::create_for_pid(child_pid);
+
     // Store child's address space CR3 for later context switch
-    // (For now, we just forget it — the child won't run until
-    // we have a proper scheduler integration)
     let _child_cr3 = child_as.cr3();
     core::mem::forget(child_as);
 

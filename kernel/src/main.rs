@@ -322,6 +322,9 @@ fn kernel_main() -> ! {
     fs::vfs::Vfs::mount("/proc", fs::procfs::ProcFs::new());
     fs::vfs::Vfs::mount("/tmp", fs::tmpfs::TmpFs::new());
 
+    // Initialize per-process FD tables (after VFS so stdio can resolve /dev/console)
+    fs::fd::init();
+
     // Initialize SMP — boot application processors
     if let Some(mp_response) = SMP.get_response() {
         // SAFETY: Called once after GDT/IDT/APIC are initialized.
@@ -1336,17 +1339,21 @@ fn extended_tests() {
         serial_println!("TEST SYS execve: PASS");
     }
 
-    // SYS: dup returns ENOSYS
+    // SYS: dup succeeds on open FD (stdin=0)
     {
         let result = syscall::table::dispatch(32, 0, 0, 0, 0, 0, 0);
-        assert!(result < 0);
-        serial_println!("TEST SYS dup: PASS");
+        assert!(result >= 0, "dup(0) should succeed, got {}", result);
+        // Close the duped FD
+        syscall::table::dispatch(3, result as u64, 0, 0, 0, 0, 0);
+        serial_println!("TEST SYS dup: PASS (fd={})", result);
     }
 
-    // SYS: dup2 returns ENOSYS
+    // SYS: dup2 succeeds
     {
-        let result = syscall::table::dispatch(33, 0, 1, 0, 0, 0, 0);
-        assert!(result < 0);
+        let result = syscall::table::dispatch(33, 0, 10, 0, 0, 0, 0);
+        assert_eq!(result, 10, "dup2(0, 10) should return 10");
+        // Close the duped FD
+        syscall::table::dispatch(3, 10, 0, 0, 0, 0, 0);
         serial_println!("TEST SYS dup2: PASS");
     }
 
