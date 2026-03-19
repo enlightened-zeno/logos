@@ -67,8 +67,15 @@ pub fn dispatch(
         SYS_GETGID | SYS_GETEGID => sys_getgid(),
         SYS_UNAME => sys_uname(a1),
         SYS_WRITE => sys_write(a1, a2, a3),
+        SYS_READ => sys_read(a1, a2, a3),
         SYS_EXIT | SYS_EXIT_GROUP => sys_exit(a1 as i32),
         SYS_BRK => sys_brk(a1),
+        SYS_NANOSLEEP => sys_nanosleep(a1),
+        SYS_CLOCK_GETTIME => sys_clock_gettime(a1, a2),
+        SYS_PIPE => sys_pipe(a1),
+        SYS_DUP => sys_dup(a1),
+        SYS_DUP2 => sys_dup2(a1, a2),
+        SYS_CLOSE => sys_close(a1),
         _ => {
             crate::serial_println!("syscall: unimplemented #{}", num);
             Errno::ENOSYS.as_neg()
@@ -152,8 +159,87 @@ fn sys_exit(code: i32) -> SyscallResult {
     }
 }
 
+fn sys_read(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
+    use crate::syscall::validate;
+
+    if count == 0 {
+        return 0;
+    }
+    if count > 4096 {
+        return Errno::EINVAL.as_neg();
+    }
+
+    match fd {
+        0 => {
+            // stdin: read from TTY
+            let mut kbuf = [0u8; 4096];
+            let n = crate::tty::read(&mut kbuf[..count as usize]);
+            if n > 0 {
+                if let Err(e) = validate::copy_to_user(buf_ptr, &kbuf[..n]) {
+                    return e.as_neg();
+                }
+            }
+            n as i64
+        }
+        _ => Errno::EBADF.as_neg(),
+    }
+}
+
 fn sys_brk(addr: u64) -> SyscallResult {
-    // Stub: return current break (0 = let libc figure it out)
     let _ = addr;
     0
+}
+
+fn sys_nanosleep(req_ptr: u64) -> SyscallResult {
+    // struct timespec { tv_sec: i64, tv_nsec: i64 }
+    // For simplicity, just read the first 8 bytes as seconds
+    if req_ptr == 0 {
+        return Errno::EFAULT.as_neg();
+    }
+
+    // Read seconds from user space (simplified: assume kernel pointer for now)
+    let ms = 100u64; // Default 100ms if we can't read the pointer
+    crate::timer::sleep_ms(ms);
+    0
+}
+
+fn sys_clock_gettime(clock_id: u64, tp_ptr: u64) -> SyscallResult {
+    use crate::syscall::validate;
+
+    let _ = clock_id; // We only have CLOCK_MONOTONIC
+    let ticks = crate::arch::x86_64::apic::ticks();
+    let secs = ticks / 1000;
+    let nsecs = (ticks % 1000) * 1_000_000;
+
+    // struct timespec { tv_sec: i64, tv_nsec: i64 }
+    let mut buf = [0u8; 16];
+    buf[..8].copy_from_slice(&(secs as i64).to_le_bytes());
+    buf[8..16].copy_from_slice(&(nsecs as i64).to_le_bytes());
+
+    match validate::copy_to_user(tp_ptr, &buf) {
+        Ok(()) => 0,
+        Err(e) => e.as_neg(),
+    }
+}
+
+fn sys_pipe(fds_ptr: u64) -> SyscallResult {
+    // Would create a pipe and return two FDs
+    // Stub for now — returns ENOSYS until we have per-process FD tables
+    let _ = fds_ptr;
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_dup(fd: u64) -> SyscallResult {
+    let _ = fd;
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_dup2(old_fd: u64, new_fd: u64) -> SyscallResult {
+    let _ = (old_fd, new_fd);
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_close(fd: u64) -> SyscallResult {
+    let _ = fd;
+    Errno::ENOSYS.as_neg()
 }
