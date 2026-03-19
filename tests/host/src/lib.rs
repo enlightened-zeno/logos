@@ -117,3 +117,5 @@ mod fs_spec_tests;
 mod ipc_spec_tests;
 #[cfg(test)]
 mod remaining_spec_tests;
+#[cfg(test)]
+mod final_tests;
