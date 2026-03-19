@@ -75,3 +75,9 @@ mod race_tests;
 mod liblogos_tests;
 #[cfg(test)]
 mod address_space_tests;
+#[cfg(test)]
+mod leak_tests;
+#[cfg(test)]
+mod soak_tests;
+#[cfg(test)]
+mod xsys_tests;
