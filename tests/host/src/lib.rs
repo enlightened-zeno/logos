@@ -21,3 +21,13 @@ mod memory_tests;
 mod vfs_tests;
 #[cfg(test)]
 mod syscall_tests;
+#[cfg(test)]
+mod timer_tests;
+#[cfg(test)]
+mod scheduler_tests;
+#[cfg(test)]
+mod pipe_tests;
+#[cfg(test)]
+mod block_cache_tests;
+#[cfg(test)]
+mod ext2_tests;
