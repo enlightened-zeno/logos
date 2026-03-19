@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "kernel",
+    "tests/host",
 ]
 resolver = "2"
 
