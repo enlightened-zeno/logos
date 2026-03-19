@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "kernel",
+]
+exclude = [
     "tests/host",
 ]
 resolver = "2"

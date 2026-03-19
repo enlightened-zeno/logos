@@ -93,3 +93,9 @@ mod interop_tests;
 mod devfs_tests;
 #[cfg(test)]
 mod procfs_tests;
+#[cfg(test)]
+mod tmpfs_tests;
+#[cfg(test)]
+mod util_tests;
+#[cfg(test)]
+mod io_tests;

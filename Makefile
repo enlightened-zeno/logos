@@ -32,7 +32,7 @@ run: image                   ## Boot in QEMU (interactive)
 test: test-kernel test-system ## Run all tests
 
 test-host:                   ## Run host-side unit tests
-	cargo test --workspace --target x86_64-unknown-linux-gnu 2>/dev/null || true
+	cd tests/host && rustup run stable cargo test
 
 test-kernel: image           ## Run in-kernel boot tests (QEMU)
 	@echo "=== Kernel Boot Tests ==="
