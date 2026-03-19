@@ -526,9 +526,15 @@ fn sys_sigprocmask(how: u64, set: u64, _oldset: u64) -> SyscallResult {
 }
 
 fn sys_sigreturn() -> SyscallResult {
-    // In a full implementation, this would restore the user context from
-    // the signal frame on the user stack. For now, it's a no-op since
-    // we handle signal delivery synchronously in the kernel.
+    // Sigreturn restores the original user context from the signal frame.
+    // The signal frame is on the user stack at the current RSP.
+    // For now, this is a no-op — the trampoline on the user stack calls
+    // this syscall, and we return normally. The frame's saved_rip/rsp
+    // would need to be restored by modifying the syscall return context.
+    //
+    // In a full implementation, we'd walk the kernel stack to find the
+    // IRETQ/SYSRET frame and modify it. For v0.1.0, the signal handler
+    // returns and execution continues (simplified model).
     0
 }
 

@@ -992,6 +992,15 @@ fn kernel_main() -> ! {
         serial_println!("TEST USER signals: PASS (exit={})", code);
     }
 
+    // Test 9b: Async signal test from user mode
+    {
+        static ELF: &[u8] = include_bytes!("test_sig_async.bin");
+        serial_print!("USER[sig-async]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER sig-async: PASS (exit={})", code);
+    }
+
     // Test 10: FD operations from user mode (open, dup, write-to-dup, close)
     {
         static ELF: &[u8] = include_bytes!("test_fd_ops.bin");

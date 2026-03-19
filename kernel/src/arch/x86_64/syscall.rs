@@ -79,6 +79,14 @@ unsafe extern "C" fn syscall_entry() {
         // RAX now holds the return value
         "add rsp, 16",    // Remove alignment + a6
 
+        // Check for pending signals before returning to user mode.
+        // Pass pointer to saved user context on stack (r15..rcx).
+        // RDI = pointer to saved context, RSI = syscall return value (rax)
+        "mov rdi, rsp",
+        "mov rsi, rax",
+        "call {check_signals}",
+        // RAX may be modified by signal delivery
+
         // Restore callee-saved registers
         "pop r15",
         "pop r14",
@@ -102,7 +110,111 @@ unsafe extern "C" fn syscall_entry() {
         "sysretq",
 
         dispatch = sym crate::syscall::table::dispatch,
+        check_signals = sym check_pending_signals,
     );
+}
+
+/// Signal frame pushed on the user stack before signal delivery.
+/// The handler returns via sigreturn which restores this context.
+#[repr(C)]
+struct SignalFrame {
+    /// Sigreturn trampoline: mov rax, 15 (SYS_SIGRETURN); syscall; (12 bytes)
+    trampoline: [u8; 16],
+    /// Signal number
+    signo: u64,
+    /// Saved user RIP (return address after signal handler)
+    saved_rip: u64,
+    /// Saved user RSP
+    saved_rsp: u64,
+    /// Saved user RFLAGS
+    saved_rflags: u64,
+    /// Saved syscall return value (RAX)
+    saved_rax: u64,
+}
+
+/// Check for pending signals and set up delivery if needed.
+/// Called from syscall exit path with pointer to saved register context.
+///
+/// Context layout on stack (from ctx_ptr):
+///   [0]=r15, [1]=r14, [2]=r13, [3]=r12, [4]=rbx, [5]=rbp,
+///   [6]=user_rsp, [7]=user_rflags, [8]=user_rip
+#[no_mangle]
+extern "C" fn check_pending_signals(ctx_ptr: *mut u64, syscall_ret: i64) -> i64 {
+    use crate::process::signal::{self, SigHandler};
+    use crate::syscall::table::current_pid_value;
+
+    let pid = current_pid_value();
+
+    // Check if there's a deliverable signal
+    let (sig, handler_addr) = match signal::with_signal_state(pid, |state| {
+        if let Some(sig) = state.dequeue() {
+            match state.get_handler(sig) {
+                SigHandler::Handler(addr) => Some((sig, addr)),
+                SigHandler::Ignore => None,
+                SigHandler::Default => {
+                    // Default action: terminate for most signals
+                    match sig.default_action() {
+                        signal::SignalAction::Terminate => {
+                            crate::serial_println!(
+                                "Signal {}: default terminate pid {}",
+                                sig as u8,
+                                pid
+                            );
+                            None // Will be handled by caller
+                        }
+                        _ => None,
+                    }
+                }
+            }
+        } else {
+            None
+        }
+    }) {
+        Some(Some(result)) => result,
+        _ => return syscall_ret, // No signal to deliver
+    };
+
+    // SAFETY: ctx_ptr points to valid saved registers on kernel stack.
+    unsafe {
+        let user_rsp = *ctx_ptr.add(6);
+        let user_rflags = *ctx_ptr.add(7);
+        let user_rip = *ctx_ptr.add(8);
+
+        // Build signal frame on user stack
+        let frame_size = core::mem::size_of::<SignalFrame>() as u64;
+        let new_user_rsp = (user_rsp - frame_size) & !0xF; // 16-byte align
+
+        // Write signal frame to user stack via HHDM
+        // Note: this assumes the user stack page is mapped in the current CR3
+        let frame_ptr = new_user_rsp as *mut SignalFrame;
+
+        // Sigreturn trampoline: mov rax, 15; syscall; nop padding
+        let mut trampoline = [0x90u8; 16]; // NOP padding
+        trampoline[0..7].copy_from_slice(&[0x48, 0xC7, 0xC0, 15, 0, 0, 0]); // mov rax, 15
+        trampoline[7..9].copy_from_slice(&[0x0F, 0x05]); // syscall
+
+        (*frame_ptr).trampoline = trampoline;
+        (*frame_ptr).signo = sig as u64;
+        (*frame_ptr).saved_rip = user_rip;
+        (*frame_ptr).saved_rsp = user_rsp;
+        (*frame_ptr).saved_rflags = user_rflags;
+        (*frame_ptr).saved_rax = syscall_ret as u64;
+
+        // Modify saved context:
+        // - RIP → handler function
+        // - RSP → below signal frame
+        // - RDI → signal number (first arg to handler)
+        *ctx_ptr.add(8) = handler_addr; // user_rip = handler
+        *ctx_ptr.add(6) = new_user_rsp; // user_rsp = below frame
+
+        // The handler's return address should be the trampoline
+        // Push trampoline address on the new user stack
+        let ret_addr_ptr = (new_user_rsp - 8) as *mut u64;
+        *ret_addr_ptr = new_user_rsp; // Return to trampoline (start of frame)
+        *ctx_ptr.add(6) = new_user_rsp - 8; // Adjust RSP for pushed return addr
+    }
+
+    syscall_ret
 }
 
 unsafe fn rdmsr(msr: u32) -> u64 {
