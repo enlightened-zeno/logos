@@ -2150,9 +2150,48 @@ fn data_integrity_tests() {
         let addr_space = AddressSpace::new(hhdm).expect("new");
         addr_space.map_user_stack().expect("map stack");
         let mapper = memory::paging::PageMapper::new(addr_space.pml4_frame, hhdm);
-        let stack_page = memory::addr::VirtAddr::new(process::address_space::USER_STACK_TOP - 4096);
+        let stack_page = memory::addr::VirtAddr::new(addr_space.stack_top - 4096);
         assert!(mapper.translate(stack_page).is_some(), "Stack not mapped");
         serial_println!("TEST address space user stack: PASS");
+    }
+
+    // ASLR: verify address spaces get different stack/heap addresses
+    {
+        use process::address_space::AddressSpace;
+        let hhdm = unsafe { memory::vmm::layout::PHYS_MEM_OFFSET };
+
+        let mut stack_tops = alloc::vec::Vec::new();
+        let mut heap_starts = alloc::vec::Vec::new();
+
+        for _ in 0..10 {
+            let addr_space = AddressSpace::new(hhdm).expect("new");
+            stack_tops.push(addr_space.stack_top);
+            heap_starts.push(addr_space.heap_start);
+            core::mem::forget(addr_space); // Don't free pages
+        }
+
+        // At least 8 out of 10 should be unique (spec says 90/100 for ASLR)
+        stack_tops.sort();
+        stack_tops.dedup();
+        heap_starts.sort();
+        heap_starts.dedup();
+
+        assert!(
+            stack_tops.len() >= 8,
+            "ASLR: only {} unique stack tops out of 10",
+            stack_tops.len()
+        );
+        assert!(
+            heap_starts.len() >= 8,
+            "ASLR: only {} unique heap starts out of 10",
+            heap_starts.len()
+        );
+
+        serial_println!(
+            "TEST ASLR randomization: PASS ({} stack, {} heap unique out of 10)",
+            stack_tops.len(),
+            heap_starts.len()
+        );
     }
 
     // SYS-C07: sys_write to stdout

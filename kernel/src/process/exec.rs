@@ -1,6 +1,6 @@
 use crate::arch::x86_64::gdt;
 use crate::memory::paging::PageFlags;
-use crate::process::address_space::{AddressSpace, USER_STACK_TOP};
+use crate::process::address_space::AddressSpace;
 use crate::process::elf;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
@@ -147,7 +147,7 @@ pub fn run_user_program(elf_data: &[u8], hhdm_offset: u64) -> i32 {
     // Enter user mode — this "returns" when return_to_kernel is called
     // SAFETY: addr_space has valid kernel mappings cloned.
     unsafe {
-        enter_user_mode(info.entry_point, USER_STACK_TOP, addr_space.cr3());
+        enter_user_mode(info.entry_point, addr_space.stack_top, addr_space.cr3());
     }
 
     // We arrive here after return_to_kernel restores context
@@ -195,7 +195,7 @@ pub fn exec_elf(elf_data: &[u8], hhdm_offset: u64) -> ! {
             "push {rip}",
             "iretq",
             ss = in(reg) gdt::USER_DS as u64,
-            rsp_user = in(reg) USER_STACK_TOP,
+            rsp_user = in(reg) addr_space.stack_top,
             rflags = in(reg) 0x202u64,
             cs = in(reg) gdt::USER_CS as u64,
             rip = in(reg) info.entry_point,

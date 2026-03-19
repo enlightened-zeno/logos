@@ -5,11 +5,22 @@ use crate::memory::paging::{PageFlags, PageMapper, PageTable, PageTableEntry};
 use crate::memory::pmm::Pmm;
 use crate::syscall::errno::Errno;
 
-/// User address space layout.
-pub const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_F000;
+/// User address space layout (base values before ASLR).
+const USER_STACK_TOP_BASE: u64 = 0x0000_7FFF_FFFF_F000;
 pub const USER_STACK_SIZE: u64 = 64 * PAGE_SIZE; // 256 KiB
-pub const USER_STACK_BOTTOM: u64 = USER_STACK_TOP - USER_STACK_SIZE;
-pub const USER_HEAP_START: u64 = 0x0000_4000_0000_0000;
+const USER_HEAP_START_BASE: u64 = 0x0000_4000_0000_0000;
+
+/// ASLR entropy: number of random bits for each region.
+/// Each bit shifts by PAGE_SIZE (4 KiB), so 20 bits = 4 GiB range.
+const ASLR_STACK_BITS: u32 = 20; // 1M pages = 4 GiB range
+const ASLR_HEAP_BITS: u32 = 16; // 64K pages = 256 MiB range
+
+/// Generate an ASLR offset (page-aligned, within given bit range).
+fn aslr_offset(bits: u32) -> u64 {
+    let rand = crate::entropy::random_u64();
+    let mask = (1u64 << bits) - 1;
+    (rand & mask) * PAGE_SIZE
+}
 
 /// A user-mode address space.
 pub struct AddressSpace {
@@ -19,6 +30,15 @@ pub struct AddressSpace {
     pub brk: u64,
     /// HHDM offset for page table access.
     pub hhdm_offset: u64,
+    /// ASLR-randomized stack top.
+    pub stack_top: u64,
+    /// ASLR-randomized heap start.
+    pub heap_start: u64,
+}
+
+/// Get the stack top for the current address space (used by exec).
+pub fn default_stack_top() -> u64 {
+    USER_STACK_TOP_BASE
 }
 
 impl AddressSpace {
@@ -52,10 +72,18 @@ impl AddressSpace {
             }
         }
 
+        // Generate ASLR offsets
+        let stack_offset = aslr_offset(ASLR_STACK_BITS);
+        let heap_offset = aslr_offset(ASLR_HEAP_BITS);
+        let stack_top = USER_STACK_TOP_BASE - stack_offset;
+        let heap_start = USER_HEAP_START_BASE + heap_offset;
+
         Ok(Self {
             pml4_frame,
-            brk: USER_HEAP_START,
+            brk: heap_start,
             hhdm_offset,
+            stack_top,
+            heap_start,
         })
     }
 
@@ -78,11 +106,12 @@ impl AddressSpace {
         Ok(frame)
     }
 
-    /// Map the user stack region.
+    /// Map the user stack region (ASLR-randomized).
     pub fn map_user_stack(&self) -> Result<(), Errno> {
+        let stack_bottom = self.stack_top - USER_STACK_SIZE;
         let pages = USER_STACK_SIZE / PAGE_SIZE;
         for i in 0..pages {
-            let vaddr = VirtAddr::new(USER_STACK_BOTTOM + i * PAGE_SIZE);
+            let vaddr = VirtAddr::new(stack_bottom + i * PAGE_SIZE);
             self.alloc_and_map(
                 vaddr,
                 PageFlags::WRITABLE | PageFlags::USER | PageFlags::NO_EXECUTE,
@@ -257,6 +286,8 @@ impl AddressSpace {
             pml4_frame: child_pml4_frame,
             brk: self.brk,
             hhdm_offset: self.hhdm_offset,
+            stack_top: self.stack_top,
+            heap_start: self.heap_start,
         })
     }
 

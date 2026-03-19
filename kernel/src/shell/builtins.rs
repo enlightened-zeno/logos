@@ -456,7 +456,7 @@ pub fn run_user_program() {
             "iretq",
             cr3 = in(reg) addr_space.cr3(),
             ss = in(reg) crate::arch::x86_64::gdt::USER_DS as u64,
-            rsp = in(reg) crate::process::address_space::USER_STACK_TOP,
+            rsp = in(reg) addr_space.stack_top,
             rflags = in(reg) 0x202u64,
             cs = in(reg) crate::arch::x86_64::gdt::USER_CS as u64,
             rip = in(reg) info.entry_point,

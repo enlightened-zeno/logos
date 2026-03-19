@@ -562,6 +562,8 @@ fn sys_fork() -> SyscallResult {
         ),
         brk: 0,
         hhdm_offset,
+        stack_top: crate::process::address_space::default_stack_top(),
+        heap_start: 0,
     };
 
     // Fork the address space (COW clone)
