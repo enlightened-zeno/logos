@@ -9,3 +9,9 @@ mod errno_tests;
 mod elf_tests;
 #[cfg(test)]
 mod signal_tests;
+#[cfg(test)]
+mod chacha20_tests;
+#[cfg(test)]
+mod fd_tests;
+#[cfg(test)]
+mod process_tests;
