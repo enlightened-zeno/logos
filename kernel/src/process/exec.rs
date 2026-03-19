@@ -116,6 +116,24 @@ pub fn run_user_program(elf_data: &[u8], hhdm_offset: u64) -> i32 {
 
     addr_space.map_user_stack().expect("exec: user stack");
 
+    // Allocate a PID for this user process
+    let child_pid = crate::process::pid::alloc_pid();
+    crate::process::pid::register(crate::process::pid::ProcessDesc {
+        pid: child_pid,
+        ppid: 1,
+        pgid: child_pid,
+        sid: child_pid,
+        state: crate::process::pid::ProcessState::Running,
+        exit_code: 0,
+        uid: 0,
+        gid: 0,
+    });
+    crate::fs::fd::create_for_pid(child_pid);
+
+    // Set current PID to the child
+    let saved_pid = crate::syscall::table::current_pid_value();
+    crate::syscall::table::set_current_pid(child_pid);
+
     // Save kernel CR3
     let current_cr3: u64;
     // SAFETY: Reading CR3 is always safe.
@@ -133,6 +151,9 @@ pub fn run_user_program(elf_data: &[u8], hhdm_offset: u64) -> i32 {
 
     // We arrive here after return_to_kernel restores context
     core::mem::forget(addr_space);
+
+    // Restore parent PID
+    crate::syscall::table::set_current_pid(saved_pid);
 
     USER_EXIT_CODE.load(Ordering::SeqCst)
 }

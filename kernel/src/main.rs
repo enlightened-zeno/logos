@@ -812,6 +812,15 @@ fn kernel_main() -> ! {
         serial_println!("TEST USER hello (2nd run): PASS (exit={})", code);
     }
 
+    // Test 9: FD operations from user mode (open, dup, write-to-dup, close)
+    {
+        static ELF: &[u8] = include_bytes!("test_fd_ops.bin");
+        serial_print!("USER[fd-ops]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER fd-ops: PASS (exit={})", code);
+    }
+
     serial_println!("=== ALL USER MODE TESTS PASSED ===");
     serial_println!("Boot complete. Halting.");
     halt_loop()

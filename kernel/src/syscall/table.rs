@@ -9,6 +9,11 @@ fn current_pid() -> u64 {
     CURRENT_PID.load(Ordering::Relaxed)
 }
 
+/// Get the current process PID (public for exec module).
+pub fn current_pid_value() -> u64 {
+    current_pid()
+}
+
 /// Set the current process PID (called on context switch or exec).
 pub fn set_current_pid(pid: u64) {
     CURRENT_PID.store(pid, Ordering::Relaxed);
@@ -200,8 +205,10 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
 fn sys_exit(code: i32) -> SyscallResult {
     let pid = current_pid();
 
-    // Close all open file descriptors
-    crate::fs::fd::remove_for_pid(pid);
+    // Close all open file descriptors (but not for PID 1 / init)
+    if pid != 1 {
+        crate::fs::fd::remove_for_pid(pid);
+    }
 
     // Reparent children to init
     crate::process::pid::reparent_children(pid);
