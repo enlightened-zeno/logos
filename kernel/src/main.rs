@@ -732,19 +732,86 @@ fn kernel_main() -> ! {
         );
     }
 
-    serial_println!("All kernel tests passed. Launching user mode test...");
+    serial_println!("All kernel tests passed.");
+    serial_println!("=== USER MODE BATTLE TEST ===");
 
-    // USER MODE PROOF-OF-LIFE TEST
-    // Load the embedded test ELF into a fresh address space and jump to ring 3.
-    // The user program does: write(1, "Hello from userspace!\n", 22) then exit(0).
-    // If this succeeds, we'll see "Hello from userspace!" on serial output.
+    // Run multiple different ELF binaries in user mode, one at a time.
+    // Each binary runs in ring 3, makes syscalls, and exits.
+    // run_user_program returns the exit code.
+
+    // Test 1: Hello world
     {
-        static USER_ELF: &[u8] = include_bytes!("test_user_program.bin");
-        serial_println!("Entering user mode...");
-        process::exec::exec_elf(USER_ELF, hhdm_offset);
-        // exec_elf never returns — it jumps to ring 3.
-        // The user program calls SYS_EXIT which halts.
+        static ELF: &[u8] = include_bytes!("test_hello.bin");
+        serial_print!("USER[hello]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0, "hello should exit 0");
+        serial_println!("TEST USER hello: PASS (exit={})", code);
     }
+
+    // Test 2: Different message
+    {
+        static ELF: &[u8] = include_bytes!("test_goodbye.bin");
+        serial_print!("USER[goodbye]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER goodbye: PASS (exit={})", code);
+    }
+
+    // Test 3: Short message
+    {
+        static ELF: &[u8] = include_bytes!("test_math.bin");
+        serial_print!("USER[math]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER math: PASS (exit={})", code);
+    }
+
+    // Test 4: Long message
+    {
+        static ELF: &[u8] = include_bytes!("test_long.bin");
+        serial_print!("USER[long]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER long message: PASS (exit={})", code);
+    }
+
+    // Test 5: Non-zero exit code
+    {
+        static ELF: &[u8] = include_bytes!("test_exit42.bin");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 42, "should exit with code 42");
+        serial_println!("TEST USER exit(42): PASS (exit={})", code);
+    }
+
+    // Test 6: Zero exit code
+    {
+        static ELF: &[u8] = include_bytes!("test_exit0.bin");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER exit(0): PASS (exit={})", code);
+    }
+
+    // Test 7: getpid syscall
+    {
+        static ELF: &[u8] = include_bytes!("test_getpid.bin");
+        serial_print!("USER[getpid]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER getpid: PASS (exit={})", code);
+    }
+
+    // Test 8: Run the same binary twice to prove reusability
+    {
+        static ELF: &[u8] = include_bytes!("test_hello.bin");
+        serial_print!("USER[hello-2nd]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER hello (2nd run): PASS (exit={})", code);
+    }
+
+    serial_println!("=== ALL USER MODE TESTS PASSED ===");
+    serial_println!("Boot complete. Halting.");
+    halt_loop()
 }
 
 fn extended_tests() {

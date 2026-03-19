@@ -183,7 +183,6 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
 
 fn sys_exit(code: i32) -> SyscallResult {
     let pid = current_pid();
-    crate::serial_println!("Process {} exited with code {}", pid, code);
 
     // Reparent children to init
     crate::process::pid::reparent_children(pid);
@@ -191,10 +190,9 @@ fn sys_exit(code: i32) -> SyscallResult {
     // Mark self as zombie
     crate::process::pid::set_zombie(pid, code);
 
-    // Halt this process (in a real system, switch to another task)
-    loop {
-        crate::arch::x86_64::cpu::hlt();
-    }
+    // Return to kernel context (restores kernel CR3/RSP and returns
+    // from run_user_program with the exit code)
+    crate::process::exec::return_to_kernel(code);
 }
 
 fn sys_read(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
