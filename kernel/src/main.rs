@@ -325,6 +325,9 @@ fn kernel_main() -> ! {
     // Initialize per-process FD tables (after VFS so stdio can resolve /dev/console)
     fs::fd::init();
 
+    // Initialize per-process signal state
+    process::signal::init();
+
     // Initialize SMP — boot application processors
     if let Some(mp_response) = SMP.get_response() {
         // SAFETY: Called once after GDT/IDT/APIC are initialized.
@@ -812,7 +815,16 @@ fn kernel_main() -> ! {
         serial_println!("TEST USER hello (2nd run): PASS (exit={})", code);
     }
 
-    // Test 9: FD operations from user mode (open, dup, write-to-dup, close)
+    // Test 9: Signal operations from user mode
+    {
+        static ELF: &[u8] = include_bytes!("test_signals.bin");
+        serial_print!("USER[signals]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER signals: PASS (exit={})", code);
+    }
+
+    // Test 10: FD operations from user mode (open, dup, write-to-dup, close)
     {
         static ELF: &[u8] = include_bytes!("test_fd_ops.bin");
         serial_print!("USER[fd-ops]: ");

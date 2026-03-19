@@ -106,6 +106,9 @@ pub fn dispatch(
         SYS_CHDIR => sys_chdir(a1),
         SYS_GETDENTS64 => sys_getdents64(a1, a2, a3),
         SYS_KILL => sys_kill(a1, a2),
+        SYS_SIGACTION => sys_sigaction(a1, a2),
+        SYS_SIGPROCMASK => sys_sigprocmask(a1, a2, a3),
+        SYS_SIGRETURN => sys_sigreturn(),
         SYS_SETPGID => sys_setpgid(a1, a2),
         SYS_SETSID => sys_setsid(),
         SYS_FORK => sys_fork(),
@@ -205,9 +208,10 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
 fn sys_exit(code: i32) -> SyscallResult {
     let pid = current_pid();
 
-    // Close all open file descriptors (but not for PID 1 / init)
+    // Close all open file descriptors and signal state (but not for PID 1 / init)
     if pid != 1 {
         crate::fs::fd::remove_for_pid(pid);
+        crate::process::signal::remove_for_pid(pid);
     }
 
     // Reparent children to init
@@ -458,8 +462,73 @@ fn sys_getdents64(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
 }
 
 fn sys_kill(pid: u64, sig: u64) -> SyscallResult {
-    let _ = (pid, sig);
-    // Would deliver a signal to the target process
+    use crate::process::signal::{self, Signal};
+
+    let sig = match Signal::from_number(sig as u8) {
+        Some(s) => s,
+        None => return Errno::EINVAL.as_neg(),
+    };
+
+    let target = if pid == 0 { current_pid() } else { pid };
+
+    if signal::send_signal(target, sig) {
+        0
+    } else {
+        Errno::ESRCH.as_neg()
+    }
+}
+
+fn sys_sigaction(sig: u64, handler_ptr: u64) -> SyscallResult {
+    use crate::process::signal::{self, SigHandler, Signal};
+
+    let sig = match Signal::from_number(sig as u8) {
+        Some(s) => s,
+        None => return Errno::EINVAL.as_neg(),
+    };
+
+    // SIGKILL and SIGSTOP cannot be caught
+    if sig == Signal::SIGKILL || sig == Signal::SIGSTOP {
+        return Errno::EINVAL.as_neg();
+    }
+
+    let handler = if handler_ptr == 0 {
+        SigHandler::Default
+    } else if handler_ptr == 1 {
+        SigHandler::Ignore // SIG_IGN
+    } else {
+        SigHandler::Handler(handler_ptr)
+    };
+
+    let pid = current_pid();
+    match signal::with_signal_state(pid, |state| {
+        state.set_handler(sig, handler);
+    }) {
+        Some(()) => 0,
+        None => Errno::ESRCH.as_neg(),
+    }
+}
+
+fn sys_sigprocmask(how: u64, set: u64, _oldset: u64) -> SyscallResult {
+    use crate::process::signal;
+
+    let pid = current_pid();
+    match signal::with_signal_state(pid, |state| {
+        match how {
+            0 => state.blocked |= set,  // SIG_BLOCK
+            1 => state.blocked &= !set, // SIG_UNBLOCK
+            2 => state.blocked = set,   // SIG_SETMASK
+            _ => {}
+        }
+    }) {
+        Some(()) => 0,
+        None => Errno::ESRCH.as_neg(),
+    }
+}
+
+fn sys_sigreturn() -> SyscallResult {
+    // In a full implementation, this would restore the user context from
+    // the signal frame on the user stack. For now, it's a no-op since
+    // we handle signal delivery synchronously in the kernel.
     0
 }
 

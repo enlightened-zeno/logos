@@ -129,6 +129,7 @@ pub fn run_user_program(elf_data: &[u8], hhdm_offset: u64) -> i32 {
         gid: 0,
     });
     crate::fs::fd::create_for_pid(child_pid);
+    crate::process::signal::create_for_pid(child_pid);
 
     // Set current PID to the child
     let saved_pid = crate::syscall::table::current_pid_value();
