@@ -4,6 +4,10 @@ members = [
 ]
 exclude = [
     "tests/host",
+    "userspace/liblogos",
+    "userspace/init",
+    "userspace/lsh",
+    "userspace/coreutils",
 ]
 resolver = "2"
 

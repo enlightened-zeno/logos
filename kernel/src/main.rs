@@ -833,6 +833,41 @@ fn kernel_main() -> ! {
         serial_println!("TEST USER fd-ops: PASS (exit={})", code);
     }
 
+    // Test 11: Real Rust-compiled init binary
+    {
+        static ELF: &[u8] = include_bytes!("test_init.bin");
+        serial_print!("USER[init]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER init (Rust ELF): PASS (exit={})", code);
+    }
+
+    // Test 12: Real Rust-compiled echo binary
+    {
+        static ELF: &[u8] = include_bytes!("test_echo.bin");
+        serial_print!("USER[echo]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER echo (Rust ELF): PASS (exit={})", code);
+    }
+
+    // Test 13: Real Rust-compiled uname binary
+    {
+        static ELF: &[u8] = include_bytes!("test_uname.bin");
+        serial_print!("USER[uname]: ");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER uname (Rust ELF): PASS (exit={})", code);
+    }
+
+    // Test 14: Real Rust-compiled true binary
+    {
+        static ELF: &[u8] = include_bytes!("test_true.bin");
+        let code = process::exec::run_user_program(ELF, hhdm_offset);
+        assert_eq!(code, 0);
+        serial_println!("TEST USER true (Rust ELF): PASS (exit={})", code);
+    }
+
     serial_println!("=== ALL USER MODE TESTS PASSED ===");
     serial_println!("Boot complete. Halting.");
     halt_loop()
