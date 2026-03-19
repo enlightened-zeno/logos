@@ -738,6 +738,111 @@ fn kernel_main() -> ! {
         );
     }
 
+    // === PERFORMANCE BENCHMARKS ===
+    {
+        extern crate alloc;
+        use arch::x86_64::cpu::rdtsc;
+
+        // PERF-02/03: PMM alloc/dealloc
+        let pmm = memory::pmm::Pmm::get();
+        let iterations = 10000u64;
+        let start = rdtsc();
+        for _ in 0..iterations {
+            let f = pmm.alloc().expect("bench alloc");
+            // SAFETY: Frame was just allocated.
+            unsafe { pmm.dealloc(f) };
+        }
+        let elapsed = rdtsc() - start;
+        let cycles_per_op = elapsed / (iterations * 2); // alloc+dealloc = 2 ops
+        serial_println!(
+            "PERF PMM alloc+dealloc: {} cycles/op ({} iterations)",
+            cycles_per_op,
+            iterations
+        );
+
+        // PERF-04/05: Slab alloc/dealloc (64 bytes)
+        let start = rdtsc();
+        for _ in 0..iterations {
+            let layout = core::alloc::Layout::from_size_align(64, 8).unwrap();
+            // SAFETY: Layout is valid, ptr is freed immediately.
+            unsafe {
+                let ptr = alloc::alloc::alloc(layout);
+                if !ptr.is_null() {
+                    alloc::alloc::dealloc(ptr, layout);
+                }
+            }
+        }
+        let elapsed = rdtsc() - start;
+        let cycles_per_op = elapsed / (iterations * 2);
+        serial_println!("PERF slab alloc+dealloc 64B: {} cycles/op", cycles_per_op);
+
+        // PERF-07: Syscall roundtrip (getpid)
+        let start = rdtsc();
+        for _ in 0..iterations {
+            syscall::table::dispatch(39, 0, 0, 0, 0, 0, 0); // SYS_GETPID
+        }
+        let elapsed = rdtsc() - start;
+        let cycles_per_call = elapsed / iterations;
+        serial_println!("PERF syscall getpid: {} cycles/call", cycles_per_call);
+
+        serial_println!("TEST performance benchmarks: PASS");
+    }
+
+    // === LEAK DETECTION ===
+    {
+        let pmm = memory::pmm::Pmm::get();
+
+        // Snapshot before
+        let free_before = pmm.free_frames();
+        let procs_before = process::pid::count();
+
+        // Workload: alloc/dealloc 1000 frames
+        for _ in 0..1000 {
+            let f = pmm.alloc().expect("leak test alloc");
+            // SAFETY: Frame was just allocated.
+            unsafe { pmm.dealloc(f) };
+        }
+
+        // Workload: create/destroy 50 processes
+        for _ in 0..50 {
+            let pid = process::pid::alloc_pid();
+            process::pid::register(process::pid::ProcessDesc {
+                pid,
+                ppid: 1,
+                pgid: pid,
+                sid: pid,
+                state: process::pid::ProcessState::Running,
+                exit_code: 0,
+                uid: 0,
+                gid: 0,
+            });
+            process::pid::set_zombie(pid, 0);
+            process::pid::reap(pid);
+        }
+
+        // Snapshot after
+        let free_after = pmm.free_frames();
+        let procs_after = process::pid::count();
+
+        // Verify no drift
+        assert_eq!(
+            free_before, free_after,
+            "LEAK: PMM frames drifted: {} -> {}",
+            free_before, free_after
+        );
+        assert_eq!(
+            procs_before, procs_after,
+            "LEAK: process count drifted: {} -> {}",
+            procs_before, procs_after
+        );
+
+        serial_println!(
+            "TEST leak detection: PASS (frames={}, procs={})",
+            free_after,
+            procs_after
+        );
+    }
+
     serial_println!("All kernel tests passed.");
     serial_println!("=== USER MODE BATTLE TEST ===");
 

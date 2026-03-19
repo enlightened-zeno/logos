@@ -52,6 +52,23 @@ pub fn interrupts_enabled() -> bool {
     read_rflags() & (1 << 9) != 0
 }
 
+/// Read the Time Stamp Counter (TSC).
+#[inline(always)]
+pub fn rdtsc() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    // SAFETY: RDTSC reads the timestamp counter. Always available on x86_64.
+    unsafe {
+        core::arch::asm!(
+            "rdtsc",
+            out("eax") lo,
+            out("edx") hi,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    (hi as u64) << 32 | lo as u64
+}
+
 /// Execute CPUID instruction with the given leaf and sub-leaf.
 #[inline]
 pub fn cpuid(leaf: u32, sub_leaf: u32) -> CpuidResult {
