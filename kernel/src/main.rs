@@ -266,6 +266,9 @@ fn kernel_main() -> ! {
         );
     }
 
+    // Initialize timer wheel (before starting periodic timer)
+    timer::init();
+
     // Start periodic timer and enable interrupts
     arch::x86_64::apic::start_periodic();
     arch::x86_64::cpu::sti();
@@ -1034,7 +1037,34 @@ fn kernel_main() -> ! {
     }
 
     serial_println!("=== ALL USER MODE TESTS PASSED ===");
-    serial_println!("Boot complete. Halting.");
+    serial_println!("Boot complete.");
+
+    // === INIT: Run init process, then spawn shell ===
+    serial_println!("init: starting user processes...");
+
+    // Run init (prints startup messages, exits)
+    {
+        static INIT_ELF: &[u8] = include_bytes!("test_init.bin");
+        let code = process::exec::run_user_program(INIT_ELF, hhdm_offset);
+        serial_println!("init: init process exited with code {}", code);
+    }
+
+    // Run shell (respawn on exit, up to 3 times for headless test)
+    serial_println!("init: spawning shell...");
+    for attempt in 0..3 {
+        static LSH_ELF: &[u8] = include_bytes!("test_lsh.bin");
+        let code = process::exec::run_user_program(LSH_ELF, hhdm_offset);
+        serial_println!(
+            "init: shell exited with code {} (attempt {})",
+            code,
+            attempt + 1
+        );
+        if code == 0 {
+            break; // Clean exit, don't respawn
+        }
+    }
+
+    serial_println!("init: all processes exited. System halting.");
     halt_loop()
 }
 
