@@ -134,22 +134,102 @@ pub unsafe fn init(pci: &PciDevice, hhdm_offset: u64) -> Result<(), &'static str
         return Err("VirtIO block: queue size is 0");
     }
 
-    // Allocate virtqueue memory (descriptors + avail + used, all page-aligned)
+    // Legacy VirtIO: desc + avail + used must be in a contiguous physical region.
+    // Layout: desc at offset 0, avail at offset desc_size, used at next page boundary.
+    // For queue_size=256: desc=4096, avail=516, used=2052 → need 3 pages.
     let pmm = Pmm::get();
-    let desc_frame = pmm.alloc().ok_or("VirtIO: out of memory for desc")?;
-    let avail_frame = pmm.alloc().ok_or("VirtIO: out of memory for avail")?;
-    let used_frame = pmm.alloc().ok_or("VirtIO: out of memory for used")?;
+    let queue_pages = 3u64; // Enough for queue_size up to 256
 
-    let desc_phys = desc_frame.start_address().as_u64();
-    let avail_phys = avail_frame.start_address().as_u64();
-    let used_phys = used_frame.start_address().as_u64();
+    // Allocate contiguous pages by trying sequential frames
+    let mut frames = alloc::vec::Vec::new();
+    for _ in 0..queue_pages {
+        let f = pmm.alloc().ok_or("VirtIO: out of memory for queue")?;
+        frames.push(f);
+    }
+    // Sort by physical address and check if contiguous
+    frames.sort_by_key(|f| f.start_address().as_u64());
+    let base_phys = frames[0].start_address().as_u64();
+    let mut contiguous = true;
+    for (i, f) in frames.iter().enumerate() {
+        if f.start_address().as_u64() != base_phys + i as u64 * PAGE_SIZE {
+            contiguous = false;
+            break;
+        }
+    }
 
-    let desc = (desc_phys + hhdm_offset) as *mut VringDesc;
-    let avail = (avail_phys + hhdm_offset) as *mut VringAvail;
-    let used = (used_phys + hhdm_offset) as *mut VringUsed;
+    if !contiguous {
+        // Free and retry — allocate a batch and pick a contiguous run
+        for f in &frames {
+            // SAFETY: Frames were just allocated.
+            unsafe { pmm.dealloc(*f) };
+        }
+        frames.clear();
+
+        // Allocate more frames to find a contiguous run
+        let mut pool = alloc::vec::Vec::new();
+        for _ in 0..64 {
+            if let Some(f) = pmm.alloc() {
+                pool.push(f);
+            }
+        }
+        pool.sort_by_key(|f| f.start_address().as_u64());
+
+        // Find a contiguous run of queue_pages
+        let mut found = false;
+        for i in 0..pool.len().saturating_sub(queue_pages as usize - 1) {
+            let base = pool[i].start_address().as_u64();
+            let mut ok = true;
+            for j in 1..queue_pages as usize {
+                if pool[i + j].start_address().as_u64() != base + j as u64 * PAGE_SIZE {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                for j in 0..queue_pages as usize {
+                    frames.push(pool[i + j]);
+                }
+                // Free unused frames
+                for (k, f) in pool.iter().enumerate() {
+                    if k < i || k >= i + queue_pages as usize {
+                        // SAFETY: Frames were just allocated.
+                        unsafe { pmm.dealloc(*f) };
+                    }
+                }
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            for f in &pool {
+                // SAFETY: Frames were just allocated.
+                unsafe { pmm.dealloc(*f) };
+            }
+            return Err("VirtIO: cannot allocate contiguous pages for queue");
+        }
+    }
+
+    let queue_phys = frames[0].start_address().as_u64();
+
+    // Zero the entire queue region
+    let queue_virt = queue_phys + hhdm_offset;
+    // SAFETY: Region is allocated and mapped via HHDM.
+    unsafe {
+        core::ptr::write_bytes(queue_virt as *mut u8, 0, (queue_pages * PAGE_SIZE) as usize);
+    }
+
+    // Compute addresses within the contiguous region
+    let desc_size = 16u64 * queue_size as u64;
+    let avail_offset = desc_size;
+    let avail_size = 4 + 2 * queue_size as u64;
+    let used_offset = (avail_offset + avail_size).div_ceil(PAGE_SIZE) * PAGE_SIZE;
+
+    let desc = (queue_virt) as *mut VringDesc;
+    let avail = (queue_virt + avail_offset) as *mut VringAvail;
+    let used = (queue_virt + used_offset) as *mut VringUsed;
 
     // Tell device where the queue is (legacy: physical page number)
-    let queue_pfn = desc_phys / PAGE_SIZE;
+    let queue_pfn = queue_phys / PAGE_SIZE;
     virtio::write32(io_base, virtio::REG_QUEUE_ADDRESS, queue_pfn as u32);
 
     // Mark driver OK
@@ -158,6 +238,10 @@ pub unsafe fn init(pci: &PciDevice, hhdm_offset: u64) -> Result<(), &'static str
         virtio::REG_DEVICE_STATUS,
         virtio::STATUS_ACKNOWLEDGE | virtio::STATUS_DRIVER | virtio::STATUS_DRIVER_OK,
     );
+
+    let desc_phys = queue_phys;
+    let avail_phys = queue_phys + avail_offset;
+    let used_phys = queue_phys + used_offset;
 
     let dev = VirtioBlock {
         io_base,

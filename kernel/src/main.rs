@@ -376,7 +376,28 @@ fn kernel_main() -> ! {
     ) {
         // SAFETY: PCI device is a valid VirtIO block device.
         match unsafe { drivers::virtio::block::init(blk_dev, hhdm_offset) } {
-            Ok(()) => serial_println!("VirtIO block: ready"),
+            Ok(()) => {
+                serial_println!("VirtIO block: ready");
+
+                // Try to mount ext2 from the VirtIO disk at /mnt
+                fn ext2_read(start_sector: u64, buf: &mut [u8]) -> Result<(), &'static str> {
+                    drivers::virtio::block::read_sectors(start_sector, buf)
+                }
+                fn ext2_write(start_sector: u64, buf: &[u8]) -> Result<(), &'static str> {
+                    drivers::virtio::block::write_sectors(start_sector, buf)
+                }
+                match fs::ext2::Ext2Fs::mount(ext2_read, ext2_write) {
+                    Ok(ext2) => {
+                        // Create /mnt mount point
+                        if let Ok(root) = fs::vfs::Vfs::resolve("/") {
+                            let _ = root.create("mnt", fs::vfs::InodeType::Directory, 0o755);
+                        }
+                        fs::vfs::Vfs::mount("/mnt", ext2);
+                        serial_println!("ext2: mounted at /mnt");
+                    }
+                    Err(e) => serial_println!("ext2: mount failed: {:?}", e),
+                }
+            }
             Err(e) => serial_println!("VirtIO block: init failed: {}", e),
         }
     } else {
