@@ -49,3 +49,11 @@ mod shm_tests;
 mod log_tests;
 #[cfg(test)]
 mod panic_tests;
+#[cfg(test)]
+mod context_tests;
+#[cfg(test)]
+mod data_integrity_tests;
+#[cfg(test)]
+mod shell_tests;
+#[cfg(test)]
+mod sync_tests;
