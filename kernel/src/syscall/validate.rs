@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use crate::syscall::errno::Errno;
 
 /// Minimum kernel virtual address — anything at or above this is kernel space.
@@ -60,6 +62,13 @@ pub fn copy_from_user(user_ptr: u64, buf: &mut [u8]) -> Result<(), Errno> {
         *byte = unsafe { core::ptr::read_volatile(src.add(i)) };
     }
     Ok(())
+}
+
+/// Copy a null-terminated string from user space into a kernel String.
+pub fn copy_str_from_user(user_ptr: u64, max_len: usize) -> Result<alloc::string::String, Errno> {
+    let mut buf = alloc::vec![0u8; max_len];
+    let len = copy_string_from_user(user_ptr, &mut buf, max_len)?;
+    alloc::string::String::from_utf8(buf[..len].to_vec()).map_err(|_| Errno::EINVAL)
 }
 
 /// Copy bytes from a kernel buffer to user space.

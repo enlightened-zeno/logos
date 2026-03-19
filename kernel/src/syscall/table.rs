@@ -72,10 +72,26 @@ pub fn dispatch(
         SYS_BRK => sys_brk(a1),
         SYS_NANOSLEEP => sys_nanosleep(a1),
         SYS_CLOCK_GETTIME => sys_clock_gettime(a1, a2),
+        SYS_OPEN => sys_open(a1, a2, a3),
+        SYS_CLOSE => sys_close(a1),
+        SYS_STAT => sys_stat(a1, a2),
+        SYS_FSTAT => sys_fstat(a1, a2),
+        SYS_LSEEK => sys_lseek(a1, a2, a3),
         SYS_PIPE => sys_pipe(a1),
         SYS_DUP => sys_dup(a1),
         SYS_DUP2 => sys_dup2(a1, a2),
-        SYS_CLOSE => sys_close(a1),
+        SYS_MKDIR => sys_mkdir(a1, a2),
+        SYS_RMDIR => sys_rmdir(a1),
+        SYS_UNLINK => sys_unlink(a1),
+        SYS_GETCWD => sys_getcwd(a1, a2),
+        SYS_CHDIR => sys_chdir(a1),
+        SYS_GETDENTS64 => sys_getdents64(a1, a2, a3),
+        SYS_KILL => sys_kill(a1, a2),
+        SYS_SETPGID => sys_setpgid(a1, a2),
+        SYS_SETSID => sys_setsid(),
+        SYS_FORK => sys_fork(),
+        SYS_WAIT4 => sys_wait4(a1, a2, a3),
+        SYS_EXECVE => sys_execve(a1, a2, a3),
         _ => {
             crate::serial_println!("syscall: unimplemented #{}", num);
             Errno::ENOSYS.as_neg()
@@ -241,5 +257,146 @@ fn sys_dup2(old_fd: u64, new_fd: u64) -> SyscallResult {
 
 fn sys_close(fd: u64) -> SyscallResult {
     let _ = fd;
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_open(path_ptr: u64, flags: u64, mode: u64) -> SyscallResult {
+    use crate::syscall::validate;
+    let _ = (flags, mode);
+
+    let path = match validate::copy_str_from_user(path_ptr, 256) {
+        Ok(p) => p,
+        Err(e) => return e.as_neg(),
+    };
+
+    // Use VFS to look up the file
+    match crate::fs::vfs::Vfs::resolve(&path).ok() {
+        Some(_inode) => {
+            // Would allocate an FD — return 3 as placeholder (0=stdin, 1=stdout, 2=stderr)
+            3
+        }
+        None => Errno::ENOENT.as_neg(),
+    }
+}
+
+fn sys_stat(path_ptr: u64, buf_ptr: u64) -> SyscallResult {
+    let _ = (path_ptr, buf_ptr);
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_fstat(fd: u64, buf_ptr: u64) -> SyscallResult {
+    let _ = (fd, buf_ptr);
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_lseek(fd: u64, offset: u64, whence: u64) -> SyscallResult {
+    let _ = (fd, offset, whence);
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_mkdir(path_ptr: u64, mode: u64) -> SyscallResult {
+    use crate::syscall::validate;
+    let _ = mode;
+
+    let path = match validate::copy_str_from_user(path_ptr, 256) {
+        Ok(p) => p,
+        Err(e) => return e.as_neg(),
+    };
+
+    match crate::fs::vfs::Vfs::resolve(&path).map(|_| ()) {
+        Ok(()) => 0,
+        Err(e) => e.as_neg(),
+    }
+}
+
+fn sys_rmdir(path_ptr: u64) -> SyscallResult {
+    use crate::syscall::validate;
+
+    let path = match validate::copy_str_from_user(path_ptr, 256) {
+        Ok(p) => p,
+        Err(e) => return e.as_neg(),
+    };
+
+    match crate::fs::vfs::Vfs::resolve(&path).map(|_| ()) {
+        Ok(()) => 0,
+        Err(e) => e.as_neg(),
+    }
+}
+
+fn sys_unlink(path_ptr: u64) -> SyscallResult {
+    use crate::syscall::validate;
+
+    let path = match validate::copy_str_from_user(path_ptr, 256) {
+        Ok(p) => p,
+        Err(e) => return e.as_neg(),
+    };
+
+    match crate::fs::vfs::Vfs::resolve(&path).map(|_| ()) {
+        Ok(()) => 0,
+        Err(e) => e.as_neg(),
+    }
+}
+
+fn sys_getcwd(buf_ptr: u64, size: u64) -> SyscallResult {
+    use crate::syscall::validate;
+
+    let cwd = b"/\0";
+    if size < cwd.len() as u64 {
+        return Errno::ERANGE.as_neg();
+    }
+    match validate::copy_to_user(buf_ptr, cwd) {
+        Ok(()) => buf_ptr as i64,
+        Err(e) => e.as_neg(),
+    }
+}
+
+fn sys_chdir(path_ptr: u64) -> SyscallResult {
+    use crate::syscall::validate;
+
+    let path = match validate::copy_str_from_user(path_ptr, 256) {
+        Ok(p) => p,
+        Err(e) => return e.as_neg(),
+    };
+
+    // Verify the path exists
+    match crate::fs::vfs::Vfs::resolve(&path).ok() {
+        Some(_) => 0,
+        None => Errno::ENOENT.as_neg(),
+    }
+}
+
+fn sys_getdents64(fd: u64, buf_ptr: u64, count: u64) -> SyscallResult {
+    let _ = (fd, buf_ptr, count);
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_kill(pid: u64, sig: u64) -> SyscallResult {
+    let _ = (pid, sig);
+    // Would deliver a signal to the target process
+    0
+}
+
+fn sys_setpgid(pid: u64, pgid: u64) -> SyscallResult {
+    let _ = (pid, pgid);
+    0
+}
+
+fn sys_setsid() -> SyscallResult {
+    // Would create a new session
+    sys_getpid()
+}
+
+fn sys_fork() -> SyscallResult {
+    // Would clone the current process with COW
+    Errno::ENOSYS.as_neg()
+}
+
+fn sys_wait4(pid: u64, status_ptr: u64, options: u64) -> SyscallResult {
+    let _ = (pid, status_ptr, options);
+    Errno::ECHILD.as_neg()
+}
+
+fn sys_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> SyscallResult {
+    let _ = (path_ptr, argv_ptr, envp_ptr);
     Errno::ENOSYS.as_neg()
 }
